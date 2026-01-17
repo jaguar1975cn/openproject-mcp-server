@@ -247,3 +247,149 @@ class TestAPICompliance:
                 lag=-1
             )
         assert "Lag must be zero or positive" in str(exc_info.value)
+
+
+class TestGetWorkPackage:
+    """Tests for get_work_package MCP tool - User Story 1 & 2."""
+
+    @pytest.fixture
+    def mock_work_package_response(self):
+        """Complete mock work package response from OpenProject API."""
+        return {
+            "id": 42,
+            "subject": "Implement user login",
+            "description": {"raw": "Add authentication feature"},
+            "startDate": "2026-01-15",
+            "dueDate": "2026-01-30",
+            "estimatedTime": "PT16H",
+            "percentageDone": 50,
+            "createdAt": "2026-01-10T10:00:00Z",
+            "updatedAt": "2026-01-17T14:30:00Z",
+            "_links": {
+                "project": {
+                    "href": "/api/v3/projects/5",
+                    "title": "Website Redesign"
+                },
+                "status": {
+                    "href": "/api/v3/statuses/2",
+                    "title": "In Progress"
+                },
+                "type": {
+                    "href": "/api/v3/types/1",
+                    "title": "Task"
+                },
+                "priority": {
+                    "href": "/api/v3/priorities/3",
+                    "title": "High"
+                },
+                "assignee": {
+                    "href": "/api/v3/users/1",
+                    "title": "John Doe"
+                },
+                "responsible": {
+                    "href": "/api/v3/users/2",
+                    "title": "Jane Smith"
+                }
+            }
+        }
+
+    # T004: Contract test for get_work_package success case
+    @pytest.mark.asyncio
+    async def test_get_work_package_success(self, mock_work_package_response):
+        """Test get_work_package returns success with valid work package ID."""
+        from src.mcp_server import get_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_work_package_by_id = AsyncMock(
+                return_value=mock_work_package_response
+            )
+
+            # FastMCP wraps functions - access underlying function via .fn
+            result = await get_work_package.fn(work_package_id=42)
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            assert "work_package" in result_data
+            assert result_data["work_package"]["id"] == 42
+            assert result_data["work_package"]["subject"] == "Implement user login"
+            mock_client.get_work_package_by_id.assert_called_once_with(42)
+
+    # T005: Contract test for get_work_package response field mapping
+    @pytest.mark.asyncio
+    async def test_get_work_package_field_mapping(self, mock_work_package_response):
+        """Test get_work_package maps all HAL+JSON fields correctly."""
+        from src.mcp_server import get_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_work_package_by_id = AsyncMock(
+                return_value=mock_work_package_response
+            )
+
+            # FastMCP wraps functions - access underlying function via .fn
+            result = await get_work_package.fn(work_package_id=42)
+            result_data = json.loads(result)
+            wp = result_data["work_package"]
+
+            # Direct fields
+            assert wp["id"] == 42
+            assert wp["subject"] == "Implement user login"
+            assert wp["description"] == "Add authentication feature"
+            assert wp["start_date"] == "2026-01-15"
+            assert wp["due_date"] == "2026-01-30"
+            assert wp["done_ratio"] == 50
+            assert wp["created_at"] == "2026-01-10T10:00:00Z"
+            assert wp["updated_at"] == "2026-01-17T14:30:00Z"
+
+            # Linked fields (extracted from _links)
+            assert wp["status"] == "In Progress"
+            assert wp["type"] == "Task"
+            assert wp["priority"] == "High"
+            assert wp["assignee"] == "John Doe"
+            assert wp["responsible"] == "Jane Smith"
+            assert wp["project_id"] == 5
+            assert wp["project_name"] == "Website Redesign"
+
+            # Estimated hours (parsed from ISO duration)
+            assert wp["estimated_hours"] == 16.0
+
+    # T009: Contract test for work package not found (404) error
+    @pytest.mark.asyncio
+    async def test_get_work_package_not_found(self):
+        """Test get_work_package returns clear error when work package doesn't exist."""
+        from src.mcp_server import get_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_work_package_by_id = AsyncMock(
+                side_effect=OpenProjectAPIError(
+                    "Work package not found",
+                    status_code=404,
+                    response_data={"errorIdentifier": "urn:openproject-org:api:v3:errors:NotFound"}
+                )
+            )
+
+            # FastMCP wraps functions - access underlying function via .fn
+            result = await get_work_package.fn(work_package_id=99999)
+            result_data = json.loads(result)
+
+            assert result_data["success"] is False
+            assert "error" in result_data
+            assert "not found" in result_data["error"].lower()
+
+    # T010: Contract test for invalid ID validation error
+    @pytest.mark.asyncio
+    async def test_get_work_package_invalid_id(self):
+        """Test get_work_package returns validation error for invalid IDs."""
+        from src.mcp_server import get_work_package
+
+        # FastMCP wraps functions - access underlying function via .fn
+        # Test with zero
+        result = await get_work_package.fn(work_package_id=0)
+        result_data = json.loads(result)
+        assert result_data["success"] is False
+        assert "positive integer" in result_data["error"].lower()
+
+        # Test with negative number
+        result = await get_work_package.fn(work_package_id=-1)
+        result_data = json.loads(result)
+        assert result_data["success"] is False
+        assert "positive integer" in result_data["error"].lower()

@@ -436,6 +436,136 @@ async def get_projects() -> str:
 
 
 @app.tool()
+async def get_work_package(work_package_id: int) -> str:
+    """Get all details of a specific work package by ID.
+
+    Args:
+        work_package_id: The ID of the work package to retrieve
+
+    Returns:
+        JSON string with work package details or error message
+    """
+    try:
+        # T006: Input validation - work_package_id must be positive
+        if work_package_id <= 0:
+            log_tool_execution(logger, "get_work_package", False, work_package_id=work_package_id, error="Invalid ID")
+            return json.dumps({
+                "success": False,
+                "error": "Work package ID must be a positive integer"
+            })
+
+        # T008: Log the operation
+        logger.info(f"Retrieving work package with ID: {work_package_id}")
+
+        # Call OpenProject API
+        wp = await openproject_client.get_work_package_by_id(work_package_id)
+
+        # T007: Parse HAL+JSON response and extract all fields per data-model.md
+        # Extract project ID from href (e.g., "/api/v3/projects/5" -> 5)
+        project_href = wp.get("_links", {}).get("project", {}).get("href", "")
+        project_id = int(project_href.split("/")[-1]) if project_href else None
+
+        # Parse ISO duration for estimated hours (e.g., "PT16H" -> 16.0)
+        estimated_time = wp.get("estimatedTime")
+        estimated_hours = None
+        if estimated_time:
+            estimated_hours = _parse_iso_duration(estimated_time)
+
+        # Extract description from raw format
+        description_obj = wp.get("description", {})
+        description = description_obj.get("raw", "") if isinstance(description_obj, dict) else ""
+
+        # Build response with all fields from data-model.md
+        work_package_data = {
+            "id": wp.get("id"),
+            "subject": wp.get("subject"),
+            "description": description,
+            "status": wp.get("_links", {}).get("status", {}).get("title"),
+            "type": wp.get("_links", {}).get("type", {}).get("title"),
+            "priority": wp.get("_links", {}).get("priority", {}).get("title"),
+            "assignee": wp.get("_links", {}).get("assignee", {}).get("title"),
+            "responsible": wp.get("_links", {}).get("responsible", {}).get("title"),
+            "project_id": project_id,
+            "project_name": wp.get("_links", {}).get("project", {}).get("title"),
+            "start_date": wp.get("startDate"),
+            "due_date": wp.get("dueDate"),
+            "estimated_hours": estimated_hours,
+            "done_ratio": wp.get("percentageDone", 0),
+            "created_at": wp.get("createdAt"),
+            "updated_at": wp.get("updatedAt")
+        }
+
+        result = {
+            "success": True,
+            "work_package": work_package_data
+        }
+
+        log_tool_execution(logger, "get_work_package", True, work_package_id=work_package_id)
+        return json.dumps(result, indent=2)
+
+    except OpenProjectAPIError as e:
+        # T011, T012: Handle specific error codes
+        error_msg = str(e.message)
+
+        if e.status_code == 404:
+            error_msg = f"Work package with ID {work_package_id} not found"
+        elif e.status_code == 403:
+            error_msg = "Permission denied: You do not have access to view this work package"
+
+        log_error(logger, e, {"tool": "get_work_package", "work_package_id": work_package_id})
+        return json.dumps({
+            "success": False,
+            "error": error_msg
+        }, indent=2)
+
+    except Exception as e:
+        # T013: Handle API connection failures and unexpected errors
+        log_error(logger, e, {"tool": "get_work_package", "work_package_id": work_package_id})
+
+        # Check if it's a connection error
+        error_str = str(e).lower()
+        if "connect" in error_str or "timeout" in error_str or "network" in error_str:
+            return json.dumps({
+                "success": False,
+                "error": "Failed to connect to OpenProject. Please check your connection and try again."
+            }, indent=2)
+
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+def _parse_iso_duration(duration: str) -> float:
+    """Parse ISO 8601 duration string to hours.
+
+    Examples:
+        PT16H -> 16.0
+        PT1H30M -> 1.5
+        PT30M -> 0.5
+    """
+    if not duration or not duration.startswith("PT"):
+        return None
+
+    hours = 0.0
+    remaining = duration[2:]  # Remove "PT" prefix
+
+    # Extract hours
+    if "H" in remaining:
+        h_idx = remaining.index("H")
+        hours += float(remaining[:h_idx])
+        remaining = remaining[h_idx + 1:]
+
+    # Extract minutes and convert to hours
+    if "M" in remaining:
+        m_idx = remaining.index("M")
+        minutes = float(remaining[:m_idx])
+        hours += minutes / 60.0
+
+    return hours
+
+
+@app.tool()
 async def get_work_packages(project_id: int) -> str:
     """Get work packages for a specific project.
     

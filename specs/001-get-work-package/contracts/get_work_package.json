@@ -1,0 +1,124 @@
+{
+  "tool": "get_work_package",
+  "description": "Get all details of a specific work package by ID",
+  "input": {
+    "type": "object",
+    "properties": {
+      "work_package_id": {
+        "type": "integer",
+        "description": "The ID of the work package to retrieve",
+        "minimum": 1
+      }
+    },
+    "required": ["work_package_id"]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean",
+        "description": "Whether the retrieval was successful"
+      },
+      "work_package": {
+        "type": "object",
+        "description": "Work package details (present when success=true)",
+        "properties": {
+          "id": { "type": "integer" },
+          "subject": { "type": "string" },
+          "description": { "type": ["string", "null"] },
+          "status": { "type": "string" },
+          "type": { "type": "string" },
+          "priority": { "type": "string" },
+          "assignee": { "type": ["string", "null"] },
+          "responsible": { "type": ["string", "null"] },
+          "project_id": { "type": "integer" },
+          "project_name": { "type": "string" },
+          "start_date": { "type": ["string", "null"], "format": "date" },
+          "due_date": { "type": ["string", "null"], "format": "date" },
+          "estimated_hours": { "type": ["number", "null"] },
+          "done_ratio": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "error": {
+        "type": "string",
+        "description": "Error message (present when success=false)"
+      }
+    },
+    "required": ["success"]
+  },
+  "errors": [
+    {
+      "condition": "work_package_id <= 0",
+      "response": {
+        "success": false,
+        "error": "Work package ID must be a positive integer"
+      }
+    },
+    {
+      "condition": "work_package not found (404)",
+      "response": {
+        "success": false,
+        "error": "Work package with ID {work_package_id} not found"
+      }
+    },
+    {
+      "condition": "permission denied (403)",
+      "response": {
+        "success": false,
+        "error": "Permission denied: You do not have access to view this work package"
+      }
+    },
+    {
+      "condition": "API unavailable",
+      "response": {
+        "success": false,
+        "error": "Failed to connect to OpenProject. Please check your connection and try again."
+      }
+    }
+  ],
+  "examples": [
+    {
+      "name": "Successful retrieval",
+      "input": { "work_package_id": 42 },
+      "output": {
+        "success": true,
+        "work_package": {
+          "id": 42,
+          "subject": "Implement user login",
+          "description": "Add authentication feature",
+          "status": "In Progress",
+          "type": "Task",
+          "priority": "High",
+          "assignee": "John Doe",
+          "responsible": "Jane Smith",
+          "project_id": 5,
+          "project_name": "Website Redesign",
+          "start_date": "2026-01-15",
+          "due_date": "2026-01-30",
+          "estimated_hours": 16.0,
+          "done_ratio": 50,
+          "created_at": "2026-01-10T10:00:00Z",
+          "updated_at": "2026-01-17T14:30:00Z"
+        }
+      }
+    },
+    {
+      "name": "Work package not found",
+      "input": { "work_package_id": 99999 },
+      "output": {
+        "success": false,
+        "error": "Work package with ID 99999 not found"
+      }
+    },
+    {
+      "name": "Invalid ID",
+      "input": { "work_package_id": -1 },
+      "output": {
+        "success": false,
+        "error": "Work package ID must be a positive integer"
+      }
+    }
+  ]
+}

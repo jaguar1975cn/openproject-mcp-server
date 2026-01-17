@@ -96,3 +96,10 @@ Two integration methods for Claude Desktop:
 
 1. **Local Python**: Configure `claude_desktop_config.json` to run `scripts/run_server.py`
 2. **Docker SSE**: Use `http://localhost:39127/sse` transport URL
+
+## Active Technologies
+- Python 3.8+ (3.11 recommended) + FastMCP >= 0.9.0, httpx, Pydantic (001-get-work-package)
+- N/A (read-only from OpenProject API) (001-get-work-package)
+
+## Recent Changes
+- 001-get-work-package: Added Python 3.8+ (3.11 recommended) + FastMCP >= 0.9.0, httpx, Pydantic
