@@ -444,6 +444,23 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `project_id` (required): Project ID to get work packages from
 - **Returns**: List of work packages with full details
 
+#### `get_work_package`
+- **Purpose**: Get all details of a specific work package by ID
+- **Parameters**:
+  - `work_package_id` (required): The ID of the work package to retrieve
+- **Returns**: Complete work package details including:
+  - Basic info: id, subject, description
+  - Status, type, priority
+  - Assignee and responsible person
+  - Project info: project_id, project_name
+  - Dates: start_date, due_date, created_at, updated_at
+  - Progress: estimated_hours, done_ratio (percentage complete)
+- **Error Handling**: Returns clear error messages for:
+  - Invalid ID (must be positive integer)
+  - Work package not found (404)
+  - Permission denied (403)
+  - Connection failures
+
 #### `update_work_package`
 - **Purpose**: Update an existing work package
 - **Parameters**:
