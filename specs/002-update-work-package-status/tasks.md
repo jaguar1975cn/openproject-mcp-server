@@ -187,7 +187,8 @@
   - Added status parameter to update_work_package documentation
   - Added is_closed response field documentation
   - Added error handling documentation
-- [ ] T022 Create git commit with all changes
+- [x] T022 Create git commit with all changes
+  - Commit: 3817ddc - Add status parameter to update_work_package MCP tool
 
 ---
 
