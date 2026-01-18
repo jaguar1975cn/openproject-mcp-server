@@ -200,7 +200,17 @@ class OpenProjectClient:
         return await self._make_request("POST", "/work_packages", json=payload)
     
     async def update_work_package(self, work_package_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update an existing work package."""
+        """Update an existing work package.
+        
+        Automatically fetches the current lockVersion if not provided in updates
+        to prevent optimistic locking conflicts (409 Conflict).
+        """
+        if "lockVersion" not in updates:
+            logger.debug(f"lockVersion not provided for WP {work_package_id}, fetching latest...")
+            wp = await self.get_work_package_by_id(work_package_id)
+            updates["lockVersion"] = wp.get("lockVersion")
+            logger.debug(f"Fetched lockVersion {updates['lockVersion']} for WP {work_package_id}")
+
         url = f"/work_packages/{work_package_id}"
         return await self._make_request("PATCH", url, json=updates)
     
