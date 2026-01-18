@@ -1,7 +1,7 @@
 """FastMCP server for OpenProject integration."""
 import asyncio
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from fastmcp import FastMCP
 from openproject_client import OpenProjectClient, OpenProjectAPIError
 from models import ProjectCreateRequest, WorkPackageCreateRequest, WorkPackageRelationCreateRequest
@@ -21,6 +21,40 @@ app = FastMCP("OpenProject MCP Server")
 # Initialize OpenProject client and resource handler
 openproject_client = OpenProjectClient()
 resource_handler = ResourceHandler(openproject_client)
+
+
+# Helper function for status resolution
+async def _resolve_status(status: Optional[Union[str, int]]) -> Optional[Dict[str, Any]]:
+    """Resolve a status name or ID to a status dict.
+
+    Args:
+        status: Status name (string, case-insensitive) or status ID (integer).
+                None or empty string returns None.
+
+    Returns:
+        Status dict with id, name, isClosed, etc. or None if not found/invalid.
+    """
+    # Handle None or empty/whitespace-only string
+    if status is None:
+        return None
+
+    if isinstance(status, str):
+        status_str = status.strip()
+        if not status_str:
+            return None
+
+    # Fetch available statuses (uses cached data with 5-min TTL)
+    statuses = await openproject_client.get_work_package_statuses()
+
+    if isinstance(status, int):
+        # Direct ID lookup - must be positive
+        if status <= 0:
+            return None
+        return next((s for s in statuses if s.get("id") == status), None)
+    else:
+        # Case-insensitive name lookup
+        status_lower = status.strip().lower()
+        return next((s for s in statuses if s.get("name", "").lower() == status_lower), None)
 
 
 # Add health check tool for MCP
@@ -625,10 +659,11 @@ async def update_work_package(
     start_date: Optional[str] = None,
     due_date: Optional[str] = None,
     assignee_id: Optional[int] = None,
-    estimated_hours: Optional[float] = None
+    estimated_hours: Optional[float] = None,
+    status: Optional[Union[str, int]] = None
 ) -> str:
     """Update an existing work package.
-    
+
     Args:
         work_package_id: ID of the work package to update
         subject: New subject/title (optional)
@@ -637,7 +672,8 @@ async def update_work_package(
         due_date: New due date in YYYY-MM-DD format (optional)
         assignee_id: User ID to assign work package to (optional)
         estimated_hours: New estimated hours (optional)
-    
+        status: Status name (string, case-insensitive) or status ID (integer) (optional)
+
     Returns:
         JSON string with update result
     """
@@ -679,7 +715,22 @@ async def update_work_package(
         
         if estimated_hours:
             updates["estimatedTime"] = f"PT{estimated_hours}H"
-        
+
+        # Handle status update
+        if status is not None and status != "":
+            resolved_status = await _resolve_status(status)
+            if resolved_status:
+                updates["_links"] = updates.get("_links", {})
+                updates["_links"]["status"] = {"href": f"/api/v3/statuses/{resolved_status['id']}"}
+            else:
+                # Invalid status - return error with available statuses
+                statuses = await openproject_client.get_work_package_statuses()
+                available_names = [s.get("name") for s in statuses]
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid status '{status}'. Available statuses: {', '.join(available_names)}"
+                })
+
         if not updates:
             return json.dumps({
                 "success": False,
@@ -687,7 +738,21 @@ async def update_work_package(
             })
         
         result = await openproject_client.update_work_package(work_package_id, updates)
-        
+
+        # Extract is_closed from status metadata
+        is_closed = None
+        status_href = result.get("_links", {}).get("status", {}).get("href", "")
+        if status_href:
+            # Extract status ID from href (e.g., "/api/v3/statuses/2" -> 2)
+            try:
+                status_id = int(status_href.split("/")[-1])
+                statuses = await openproject_client.get_work_package_statuses()
+                matched_status = next((s for s in statuses if s.get("id") == status_id), None)
+                if matched_status:
+                    is_closed = matched_status.get("isClosed", False)
+            except (ValueError, IndexError):
+                pass
+
         return json.dumps({
             "success": True,
             "message": f"Work package {work_package_id} updated successfully",
@@ -698,6 +763,7 @@ async def update_work_package(
                 "start_date": result.get("startDate"),
                 "due_date": result.get("dueDate"),
                 "status": result.get("_links", {}).get("status", {}).get("title", "Unknown"),
+                "is_closed": is_closed,
                 "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
             }
         }, indent=2)

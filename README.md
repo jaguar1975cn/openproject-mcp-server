@@ -471,6 +471,9 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `due_date` (optional): New due date
   - `assignee_id` (optional): New assignee
   - `estimated_hours` (optional): New time estimate
+  - `status` (optional): Status name (e.g., "In Progress") or status ID (e.g., 2). Case-insensitive.
+- **Response**: Includes `is_closed` boolean indicating if the work package is in a closed status
+- **Error Handling**: Invalid status returns error with list of available statuses
 
 #### `get_project_summary`
 - **Purpose**: Get comprehensive project overview

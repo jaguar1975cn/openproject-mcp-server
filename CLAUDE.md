@@ -100,6 +100,8 @@ Two integration methods for Claude Desktop:
 ## Active Technologies
 - Python 3.8+ (3.11 recommended) + FastMCP >= 0.9.0, httpx, Pydantic (001-get-work-package)
 - N/A (read-only from OpenProject API) (001-get-work-package)
+- Python 3.8+ (3.11 recommended) + FastMCP >= 0.9.0, httpx (async HTTP client), Pydantic (validation) (002-update-work-package-status)
+- N/A (stateless, uses OpenProject API) (002-update-work-package-status)
 
 ## Recent Changes
 - 001-get-work-package: Added Python 3.8+ (3.11 recommended) + FastMCP >= 0.9.0, httpx, Pydantic
