@@ -23,6 +23,9 @@ class Settings:
         self.mcp_host: str = os.getenv("MCP_HOST", "localhost")
         self.mcp_port: int = int(os.getenv("MCP_PORT", "8080"))
         self.log_level: str = os.getenv("MCP_LOG_LEVEL", "INFO")
+
+        # SSL configuration
+        self.openproject_verify_ssl: bool = os.getenv("OPENPROJECT_VERIFY_SSL", "true").lower() != "false"
         
         # Validate configuration
         self._validate_config()

@@ -74,6 +74,7 @@ class OpenProjectClient:
         # HTTP client configuration
         self.client = httpx.AsyncClient(
             timeout=30.0,
+            verify=settings.openproject_verify_ssl,
             headers={
                 "Authorization": f"Basic {auth_string}",
                 "Content-Type": "application/json",
