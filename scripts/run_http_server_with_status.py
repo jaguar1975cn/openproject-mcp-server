@@ -132,7 +132,7 @@ def run_mcp_server():
     try:
         from mcp_server import app
         print("Starting OpenProject MCP Server in HTTP mode on port 8080...")
-        app.run(transport="sse", host="0.0.0.0", port=8080)
+        app.run(transport="streamable-http", host="0.0.0.0", port=8080)
     except ImportError as e:
         print(f"Import error: {e}")
         sys.exit(1)
