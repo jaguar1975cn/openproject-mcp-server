@@ -58,7 +58,7 @@ class TestOpenProjectIntegration:
             mock_get_users.return_value = mock_users
             
             # Test get_users without filter
-            result = await get_users()
+            result = await get_users.fn()
             result_data = json.loads(result)
             
             assert result_data["success"] is True
@@ -68,7 +68,7 @@ class TestOpenProjectIntegration:
             
             # Test get_users with email filter
             mock_get_users.return_value = [mock_users[0]]  # Only John
-            result = await get_users("john@example.com")
+            result = await get_users.fn("john@example.com")
             result_data = json.loads(result)
             
             assert result_data["success"] is True
@@ -103,7 +103,7 @@ class TestOpenProjectIntegration:
             mock_update_wp.return_value = mock_updated_wp
             
             # Test successful assignment
-            result = await assign_work_package_by_email(123, "john@example.com")
+            result = await assign_work_package_by_email.fn(123, "john@example.com")
             result_data = json.loads(result)
             
             assert result_data["success"] is True
@@ -125,7 +125,7 @@ class TestOpenProjectIntegration:
         with patch.object(openproject_client, 'get_user_by_email', new_callable=AsyncMock) as mock_get_user:
             mock_get_user.return_value = None  # User not found
             
-            result = await assign_work_package_by_email(123, "nonexistent@example.com")
+            result = await assign_work_package_by_email.fn(123, "nonexistent@example.com")
             result_data = json.loads(result)
             
             assert result_data["success"] is False
@@ -167,7 +167,7 @@ class TestOpenProjectIntegration:
         with patch.object(openproject_client, 'get_project_memberships', new_callable=AsyncMock) as mock_get_members:
             mock_get_members.return_value = mock_memberships
             
-            result = await get_project_members(1)
+            result = await get_project_members.fn(1)
             result_data = json.loads(result)
             
             assert result_data["success"] is True
@@ -206,21 +206,21 @@ class TestOpenProjectIntegration:
             mock_get_priorities.return_value = mock_priorities
             
             # Test work package types
-            result = await get_work_package_types()
+            result = await get_work_package_types.fn()
             result_data = json.loads(result)
             assert result_data["success"] is True
             assert len(result_data["types"]) == 3
             assert any(t["is_default"] for t in result_data["types"])
             
             # Test work package statuses
-            result = await get_work_package_statuses()
+            result = await get_work_package_statuses.fn()
             result_data = json.loads(result)
             assert result_data["success"] is True
             assert len(result_data["statuses"]) == 3
             assert any(s["is_closed"] for s in result_data["statuses"])
             
             # Test priorities
-            result = await get_priorities()
+            result = await get_priorities.fn()
             result_data = json.loads(result)
             assert result_data["success"] is True
             assert len(result_data["priorities"]) == 3
@@ -251,7 +251,7 @@ class TestOpenProjectIntegration:
             mock_create_relation.return_value = mock_relation_result
             
             # Test successful relation creation
-            result = await create_work_package_dependency(
+            result = await create_work_package_dependency.fn(
                 from_work_package_id=1,
                 to_work_package_id=2,
                 relation_type="follows",
@@ -272,7 +272,7 @@ class TestOpenProjectIntegration:
     async def test_validation_error_handling(self):
         """Test validation error handling in integration workflow."""
         # Test invalid work package dependency (self-relation)
-        result = await create_work_package_dependency(
+        result = await create_work_package_dependency.fn(
             from_work_package_id=1,
             to_work_package_id=1  # Same as from
         )
@@ -286,7 +286,7 @@ class TestOpenProjectIntegration:
     @pytest.mark.asyncio
     async def test_api_error_handling(self):
         """Test OpenProject API error handling in integration workflow."""
-        from src.openproject_client import OpenProjectAPIError
+        from openproject_client import OpenProjectAPIError
         
         with patch.object(openproject_client, 'get_users', new_callable=AsyncMock) as mock_get_users:
             # Mock API error
@@ -296,7 +296,7 @@ class TestOpenProjectIntegration:
                 response_data={"error": "Invalid API key"}
             )
             
-            result = await get_users()
+            result = await get_users.fn()
             result_data = json.loads(result)
             
             assert result_data["success"] is False
@@ -307,19 +307,19 @@ class TestOpenProjectIntegration:
     async def test_input_validation_edge_cases(self):
         """Test edge cases for input validation."""
         # Test empty email
-        result = await assign_work_package_by_email(123, "")
+        result = await assign_work_package_by_email.fn(123, "")
         result_data = json.loads(result)
         assert result_data["success"] is False
         assert "Valid email address is required" in result_data["error"]
         
         # Test invalid email format
-        result = await assign_work_package_by_email(123, "invalid-email")
+        result = await assign_work_package_by_email.fn(123, "invalid-email")
         result_data = json.loads(result)
         assert result_data["success"] is False
         assert "Valid email address is required" in result_data["error"]
         
         # Test zero work package ID
-        result = await get_project_members(0)
+        result = await get_project_members.fn(0)
         result_data = json.loads(result)
         assert result_data["success"] is False
         assert "Project ID must be a positive integer" in result_data["error"]
