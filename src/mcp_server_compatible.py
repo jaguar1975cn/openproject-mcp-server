@@ -84,7 +84,12 @@ class MCPServer:
                         "openproject_url": settings.openproject_url
                     }
                 
-                log_tool_execution(logger, "health_check", {}, result)
+                log_tool_execution(
+                    logger,
+                    "health_check",
+                    connection_result.get('success', False),
+                    status=result["status"]
+                )
                 return json.dumps(result, indent=2)
                 
             except Exception as e:

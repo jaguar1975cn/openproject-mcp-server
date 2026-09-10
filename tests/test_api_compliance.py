@@ -926,3 +926,58 @@ class TestWorkPackageVersion:
             assert result_data["success"] is True
             assert [v["name"] for v in result_data["versions"]] == ["Sprint 1", "Release 2.0"]
             assert result_data["versions"][0]["id"] == 5
+
+
+class TestHealthCheck:
+    """Tests for the health_check tool."""
+
+    @pytest.mark.asyncio
+    async def test_health_check_healthy(self):
+        """Test health_check reports a healthy connection (regression: logging TypeError)."""
+        from src.mcp_server import health_check
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.test_connection = AsyncMock(return_value={
+                "success": True,
+                "openproject_version": "13.0.0"
+            })
+
+            result = await health_check.fn()
+            result_data = json.loads(result)
+
+            assert result_data["status"] == "healthy"
+            assert result_data["openproject_connection"] == "connected"
+            assert result_data["openproject_version"] == "13.0.0"
+            assert "error" not in result_data
+
+    @pytest.mark.asyncio
+    async def test_health_check_degraded(self):
+        """Test health_check reports a failed OpenProject connection as degraded."""
+        from src.mcp_server import health_check
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.test_connection = AsyncMock(return_value={
+                "success": False,
+                "message": "Connection refused"
+            })
+
+            result = await health_check.fn()
+            result_data = json.loads(result)
+
+            assert result_data["status"] == "degraded"
+            assert result_data["openproject_connection"] == "failed"
+            assert result_data["error"] == "Connection refused"
+
+    @pytest.mark.asyncio
+    async def test_health_check_unhealthy_on_exception(self):
+        """Test health_check surfaces unexpected errors as unhealthy."""
+        from src.mcp_server import health_check
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.test_connection = AsyncMock(side_effect=RuntimeError("boom"))
+
+            result = await health_check.fn()
+            result_data = json.loads(result)
+
+            assert result_data["status"] == "unhealthy"
+            assert "boom" in result_data["error"]
