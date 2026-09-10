@@ -289,6 +289,10 @@ class TestGetWorkPackage:
                 "responsible": {
                     "href": "/api/v3/users/2",
                     "title": "Jane Smith"
+                },
+                "version": {
+                    "href": "/api/v3/versions/5",
+                    "title": "Sprint 1"
                 }
             }
         }
@@ -348,9 +352,28 @@ class TestGetWorkPackage:
             assert wp["responsible"] == "Jane Smith"
             assert wp["project_id"] == 5
             assert wp["project_name"] == "Website Redesign"
+            assert wp["version"] == "Sprint 1"
 
             # Estimated hours (parsed from ISO duration)
             assert wp["estimated_hours"] == 16.0
+
+    @pytest.mark.asyncio
+    async def test_get_work_package_without_version(self, mock_work_package_response):
+        """Test get_work_package returns version=None when none is assigned."""
+        from src.mcp_server import get_work_package
+
+        del mock_work_package_response["_links"]["version"]
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_work_package_by_id = AsyncMock(
+                return_value=mock_work_package_response
+            )
+
+            result = await get_work_package.fn(work_package_id=42)
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            assert result_data["work_package"]["version"] is None
 
     # T009: Contract test for work package not found (404) error
     @pytest.mark.asyncio

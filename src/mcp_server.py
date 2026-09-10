@@ -583,6 +583,7 @@ async def get_work_package(work_package_id: int) -> str:
             "status": wp.get("_links", {}).get("status", {}).get("title"),
             "type": wp.get("_links", {}).get("type", {}).get("title"),
             "priority": wp.get("_links", {}).get("priority", {}).get("title"),
+            "version": _version_title(wp),
             "assignee": wp.get("_links", {}).get("assignee", {}).get("title"),
             "responsible": wp.get("_links", {}).get("responsible", {}).get("title"),
             "project_id": project_id,

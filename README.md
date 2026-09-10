@@ -460,6 +460,7 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
 - **Returns**: Complete work package details including:
   - Basic info: id, subject, description
   - Status, type, priority
+  - Version: assigned version/milestone name (null if none)
   - Assignee and responsible person
   - Project info: project_id, project_name
   - Dates: start_date, due_date, created_at, updated_at
