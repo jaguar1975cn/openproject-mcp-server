@@ -313,18 +313,24 @@ class OpenProjectClient:
         except (OpenProjectAPIError, IndexError):
             return None
 
-    async def get_work_package_types(self, use_cache: bool = True) -> List[Dict[str, Any]]:
-        """Get available work package types."""
+    async def get_work_package_types(self, project_id: Optional[int] = None, use_cache: bool = True) -> List[Dict[str, Any]]:
+        """Get available work package types.
+        
+        Types are defined instance-wide, but each project enables a subset of
+        them. Pass project_id to get only the types enabled for that project.
+        """
         if use_cache:
+            cache_key = f"work_package_types_project_{project_id}" if project_id else "work_package_types"
             return await self.get_cached_or_fetch(
-                "work_package_types",
-                lambda: self._fetch_work_package_types()
+                cache_key,
+                lambda: self._fetch_work_package_types(project_id)
             )
-        return await self._fetch_work_package_types()
+        return await self._fetch_work_package_types(project_id)
 
-    async def _fetch_work_package_types(self) -> List[Dict[str, Any]]:
+    async def _fetch_work_package_types(self, project_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Internal method to fetch work package types from API."""
-        response = await self._make_request("GET", "/types")
+        url = f"/projects/{project_id}/types" if project_id else "/types"
+        response = await self._make_request("GET", url)
         return response.get("_embedded", {}).get("elements", [])
 
     async def get_versions(self, project_id: Optional[int] = None, use_cache: bool = True) -> List[Dict[str, Any]]:

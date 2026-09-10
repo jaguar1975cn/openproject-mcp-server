@@ -374,8 +374,11 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `assignee_id` (optional): User ID to assign to
   - `estimated_hours` (optional): Estimated completion time
   - `version` (optional): Version/milestone name (e.g., "Sprint 1") or version ID (e.g., 5). Case-insensitive; names are resolved within the target project.
-- **Response**: Includes `version` with the assigned version name (null if none)
-- **Error Handling**: Invalid version returns error with list of the project's available versions
+  - `type` (optional): Type name (e.g., "Bug", "Milestone") or type ID. Case-insensitive; validated against the types enabled for the project. Defaults to the instance default type.
+  - `priority` (optional): Priority name (e.g., "High") or priority ID. Case-insensitive. Defaults to Normal.
+  - `status` (optional): Initial status name (e.g., "New") or status ID. Case-insensitive. Defaults to the default status; OpenProject workflow rules may reject a status that is not a valid starting point.
+- **Response**: Includes `type`, `priority`, `status` and `version` as resolved by OpenProject (`version` is null if none)
+- **Error Handling**: An invalid type, priority, status or version returns an error listing the available values
 
 #### `create_work_package_dependency`
 - **Purpose**: Create dependencies between work packages for Gantt charts
@@ -421,7 +424,8 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
 
 #### `get_work_package_types`
 - **Purpose**: Get available work package types from OpenProject instance
-- **Parameters**: None
+- **Parameters**:
+  - `project_id` (optional): Restrict results to the types enabled for this project. Types are defined instance-wide, but each project enables only a subset.
 - **Returns**: List of work package types (Task, Bug, Feature, etc.) with configuration
 
 #### `get_work_package_statuses`
@@ -483,8 +487,10 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `estimated_hours` (optional): New time estimate
   - `status` (optional): Status name (e.g., "In Progress") or status ID (e.g., 2). Case-insensitive.
   - `version` (optional): Version/milestone name (e.g., "Sprint 1") or version ID (e.g., 5). Case-insensitive; names are resolved within the work package's own project.
-- **Response**: Includes `is_closed` boolean indicating if the work package is in a closed status, and `version` with the assigned version name (null if none)
-- **Error Handling**: Invalid status or version returns error with the list of available values
+  - `type` (optional): Type name (e.g., "Bug", "Milestone") or type ID. Case-insensitive; names are validated against the types enabled for the work package's project.
+  - `priority` (optional): Priority name (e.g., "High") or priority ID. Case-insensitive.
+- **Response**: Includes `is_closed` boolean indicating if the work package is in a closed status, plus `type`, `priority` and `version` (null if no version is assigned)
+- **Error Handling**: An invalid status, type, priority or version returns an error listing the available values
 
 #### `get_project_summary`
 - **Purpose**: Get comprehensive project overview

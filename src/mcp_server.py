@@ -1,7 +1,7 @@
 """FastMCP server for OpenProject integration."""
 import asyncio
 import json
-from typing import Dict, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union
 from fastmcp import FastMCP
 from openproject_client import OpenProjectClient, OpenProjectAPIError
 from models import ProjectCreateRequest, WorkPackageCreateRequest, WorkPackageRelationCreateRequest
@@ -24,6 +24,41 @@ resource_handler = ResourceHandler(openproject_client)
 
 
 # Helper function for status resolution
+def _match_named(
+    items: List[Dict[str, Any]],
+    value: Optional[Union[str, int]]
+) -> Optional[Dict[str, Any]]:
+    """Find an entry in a list of OpenProject resources by ID or name.
+
+    Args:
+        items: Resources to search, each with "id" and "name" keys.
+        value: Resource name (string, case-insensitive) or ID (integer).
+               None or an empty/whitespace-only string returns None.
+
+    Returns:
+        The matching resource dict, or None if not found/invalid.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, int):
+        # Direct ID lookup - must be positive
+        if value <= 0:
+            return None
+        return next((i for i in items if i.get("id") == value), None)
+
+    # Case-insensitive name lookup
+    name = value.strip().lower()
+    if not name:
+        return None
+    return next((i for i in items if i.get("name", "").lower() == name), None)
+
+
+def _available_names(items: List[Dict[str, Any]]) -> str:
+    """Format resource names for an error message."""
+    return ", ".join(str(i.get("name")) for i in items) or "none"
+
+
 async def _resolve_status(status: Optional[Union[str, int]]) -> Optional[Dict[str, Any]]:
     """Resolve a status name or ID to a status dict.
 
@@ -34,27 +69,47 @@ async def _resolve_status(status: Optional[Union[str, int]]) -> Optional[Dict[st
     Returns:
         Status dict with id, name, isClosed, etc. or None if not found/invalid.
     """
-    # Handle None or empty/whitespace-only string
     if status is None:
         return None
 
-    if isinstance(status, str):
-        status_str = status.strip()
-        if not status_str:
-            return None
-
     # Fetch available statuses (uses cached data with 5-min TTL)
-    statuses = await openproject_client.get_work_package_statuses()
+    return _match_named(await openproject_client.get_work_package_statuses(), status)
 
-    if isinstance(status, int):
-        # Direct ID lookup - must be positive
-        if status <= 0:
-            return None
-        return next((s for s in statuses if s.get("id") == status), None)
-    else:
-        # Case-insensitive name lookup
-        status_lower = status.strip().lower()
-        return next((s for s in statuses if s.get("name", "").lower() == status_lower), None)
+
+async def _resolve_type(
+    type_: Optional[Union[str, int]],
+    project_id: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    """Resolve a work package type name or ID to a type dict.
+
+    Args:
+        type_: Type name (string, case-insensitive) or type ID (integer).
+               None or empty string returns None.
+        project_id: Restrict the lookup to the types enabled for this project.
+
+    Returns:
+        Type dict with id, name, etc. or None if not found/invalid.
+    """
+    if type_ is None:
+        return None
+
+    return _match_named(await openproject_client.get_work_package_types(project_id), type_)
+
+
+async def _resolve_priority(priority: Optional[Union[str, int]]) -> Optional[Dict[str, Any]]:
+    """Resolve a priority name or ID to a priority dict.
+
+    Args:
+        priority: Priority name (string, case-insensitive) or priority ID (integer).
+                  None or empty string returns None.
+
+    Returns:
+        Priority dict with id, name, etc. or None if not found/invalid.
+    """
+    if priority is None:
+        return None
+
+    return _match_named(await openproject_client.get_priorities(), priority)
 
 
 async def _resolve_version(
@@ -75,23 +130,8 @@ async def _resolve_version(
     if version is None:
         return None
 
-    if isinstance(version, str):
-        version_str = version.strip()
-        if not version_str:
-            return None
-
     # Fetch available versions (uses cached data with 5-min TTL)
-    versions = await openproject_client.get_versions(project_id)
-
-    if isinstance(version, int):
-        # Direct ID lookup - must be positive
-        if version <= 0:
-            return None
-        return next((v for v in versions if v.get("id") == version), None)
-
-    # Case-insensitive name lookup
-    version_lower = version.strip().lower()
-    return next((v for v in versions if v.get("name", "").lower() == version_lower), None)
+    return _match_named(await openproject_client.get_versions(project_id), version)
 
 
 def _version_title(work_package: Dict[str, Any]) -> Optional[str]:
@@ -209,7 +249,10 @@ async def create_work_package(
     parent_id: Optional[int] = None,
     assignee_id: Optional[int] = None,
     estimated_hours: Optional[float] = None,
-    version: Optional[Union[str, int]] = None
+    version: Optional[Union[str, int]] = None,
+    type: Optional[Union[str, int]] = None,
+    priority: Optional[Union[str, int]] = None,
+    status: Optional[Union[str, int]] = None
 ) -> str:
     """Create a work package in a project with dates for Gantt chart.
     
@@ -224,6 +267,13 @@ async def create_work_package(
         estimated_hours: Estimated hours for completion (optional)
         version: Version/milestone name (string, case-insensitive) or version ID
                  (integer) to assign the work package to (optional)
+        type: Type name (e.g. "Task", "Bug", "Milestone") or type ID (optional,
+              defaults to the instance default type)
+        priority: Priority name (e.g. "High") or priority ID (optional, defaults
+                  to Normal)
+        status: Initial status name (e.g. "New") or status ID (optional, defaults
+                to the default status; OpenProject workflow rules may reject a
+                status that is not a valid starting point)
     
     Returns:
         JSON string with work package creation result
@@ -255,19 +305,40 @@ async def create_work_package(
                 "error": "Due date must be in YYYY-MM-DD format"
             })
         
-        # Resolve version (scoped to the target project) if provided
-        version_id = None
-        if version is not None and version != "":
-            resolved_version = await _resolve_version(version, project_id)
-            if not resolved_version:
-                versions = await openproject_client.get_versions(project_id)
-                available_names = [v.get("name") for v in versions]
+        # Resolve the named fields to IDs. Types and versions are per-project;
+        # statuses and priorities are instance-wide.
+        resolved_ids = {}
+        for field, value, resolve, fetch_available, scoped in (
+            ("type", type,
+             lambda v: _resolve_type(v, project_id),
+             lambda: openproject_client.get_work_package_types(project_id), True),
+            ("version", version,
+             lambda v: _resolve_version(v, project_id),
+             lambda: openproject_client.get_versions(project_id), True),
+            ("status", status, _resolve_status,
+             openproject_client.get_work_package_statuses, False),
+            ("priority", priority, _resolve_priority,
+             openproject_client.get_priorities, False),
+        ):
+            if value is None or value == "":
+                continue
+            
+            resolved = await resolve(value)
+            if not resolved:
+                scope = f" for project {project_id}" if scoped else ""
                 return json.dumps({
                     "success": False,
-                    "error": f"Invalid version '{version}' for project {project_id}. "
-                             f"Available versions: {', '.join(available_names) or 'none'}"
+                    "error": f"Invalid {field} '{value}'{scope}. "
+                             f"Available {field}s: {_available_names(await fetch_available())}"
                 })
-            version_id = resolved_version["id"]
+            resolved_ids[field] = resolved["id"]
+        
+        # Only override the model defaults for fields that were provided
+        optional_ids = {
+            f"{field}_id": resolved_ids[field]
+            for field in ("type", "status", "priority")
+            if field in resolved_ids
+        }
         
         # Create work package request
         wp_request = WorkPackageCreateRequest(
@@ -279,7 +350,8 @@ async def create_work_package(
             parent_id=parent_id,
             assignee_id=assignee_id,
             estimated_hours=estimated_hours,
-            version_id=version_id
+            version_id=resolved_ids.get("version"),
+            **optional_ids
         )
         
         # Call OpenProject API
@@ -296,6 +368,8 @@ async def create_work_package(
                 "start_date": result.get("startDate"),
                 "due_date": result.get("dueDate"),
                 "status": result.get("_links", {}).get("status", {}).get("title", "Unknown"),
+                "type": result.get("_links", {}).get("type", {}).get("title"),
+                "priority": result.get("_links", {}).get("priority", {}).get("title"),
                 "version": _version_title(result),
                 "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
             }
@@ -728,7 +802,9 @@ async def update_work_package(
     assignee_id: Optional[int] = None,
     estimated_hours: Optional[float] = None,
     status: Optional[Union[str, int]] = None,
-    version: Optional[Union[str, int]] = None
+    version: Optional[Union[str, int]] = None,
+    type: Optional[Union[str, int]] = None,
+    priority: Optional[Union[str, int]] = None
 ) -> str:
     """Update an existing work package.
 
@@ -743,6 +819,8 @@ async def update_work_package(
         status: Status name (string, case-insensitive) or status ID (integer) (optional)
         version: Version/milestone name (string, case-insensitive) or version ID
                  (integer) to assign the work package to (optional)
+        type: Type name (e.g. "Task", "Bug", "Milestone") or type ID (optional)
+        priority: Priority name (e.g. "High") or priority ID (optional)
 
     Returns:
         JSON string with update result
@@ -786,49 +864,54 @@ async def update_work_package(
         if estimated_hours:
             updates["estimatedTime"] = f"PT{estimated_hours}H"
 
-        # Handle status update
-        if status is not None and status != "":
-            resolved_status = await _resolve_status(status)
-            if resolved_status:
-                updates["_links"] = updates.get("_links", {})
-                updates["_links"]["status"] = {"href": f"/api/v3/statuses/{resolved_status['id']}"}
-            else:
-                # Invalid status - return error with available statuses
-                statuses = await openproject_client.get_work_package_statuses()
-                available_names = [s.get("name") for s in statuses]
-                return json.dumps({
-                    "success": False,
-                    "error": f"Invalid status '{status}'. Available statuses: {', '.join(available_names)}"
-                })
-
-        # Handle version update
-        if version is not None and version != "":
-            # Version names are only unique per project, so scope name lookups to the
-            # work package's own project. Reuse the fetched lockVersion to avoid a
-            # second round trip inside the client.
-            project_id = None
-            if isinstance(version, str):
+        # Type and version names are only meaningful within a project, so
+        # resolving one by name needs the work package's own project. Fetch the
+        # work package at most once for that, reusing its lockVersion to avoid a
+        # second round trip inside the client.
+        wp_project = {}
+        
+        async def project_scope():
+            if "id" not in wp_project:
                 wp = await openproject_client.get_work_package_by_id(work_package_id)
                 updates.setdefault("lockVersion", wp.get("lockVersion"))
                 project_href = wp.get("_links", {}).get("project", {}).get("href", "")
                 try:
-                    project_id = int(project_href.split("/")[-1])
+                    wp_project["id"] = int(project_href.split("/")[-1])
                 except (ValueError, IndexError):
-                    project_id = None
-
-            resolved_version = await _resolve_version(version, project_id)
-            if resolved_version:
-                updates["_links"] = updates.get("_links", {})
-                updates["_links"]["version"] = {"href": f"/api/v3/versions/{resolved_version['id']}"}
-            else:
-                # Invalid version - return error with available versions
-                versions = await openproject_client.get_versions(project_id)
-                available_names = [v.get("name") for v in versions]
+                    wp_project["id"] = None
+            return wp_project["id"]
+        
+        # Resolve the named fields to their API links
+        for field, value, path, scoped, resolve, fetch_available in (
+            ("status", status, "statuses", False,
+             lambda v, p: _resolve_status(v),
+             lambda p: openproject_client.get_work_package_statuses()),
+            ("type", type, "types", True,
+             lambda v, p: _resolve_type(v, p),
+             lambda p: openproject_client.get_work_package_types(p)),
+            ("priority", priority, "priorities", False,
+             lambda v, p: _resolve_priority(v),
+             lambda p: openproject_client.get_priorities()),
+            ("version", version, "versions", True,
+             lambda v, p: _resolve_version(v, p),
+             lambda p: openproject_client.get_versions(p)),
+        ):
+            if value is None or value == "":
+                continue
+            
+            # Only a project-scoped lookup by name needs the project
+            project_id = await project_scope() if scoped and isinstance(value, str) else None
+            
+            resolved = await resolve(value, project_id)
+            if not resolved:
                 return json.dumps({
                     "success": False,
-                    "error": f"Invalid version '{version}'. "
-                             f"Available versions: {', '.join(available_names) or 'none'}"
+                    "error": f"Invalid {field} '{value}'. "
+                             f"Available {field}s: {_available_names(await fetch_available(project_id))}"
                 })
+            
+            updates["_links"] = updates.get("_links", {})
+            updates["_links"][field] = {"href": f"/api/v3/{path}/{resolved['id']}"}
 
         if not updates:
             return json.dumps({
@@ -863,6 +946,8 @@ async def update_work_package(
                 "due_date": result.get("dueDate"),
                 "status": result.get("_links", {}).get("status", {}).get("title", "Unknown"),
                 "is_closed": is_closed,
+                "type": result.get("_links", {}).get("type", {}).get("title"),
+                "priority": result.get("_links", {}).get("priority", {}).get("title"),
                 "version": _version_title(result),
                 "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
             }
@@ -1073,14 +1158,25 @@ async def get_project_members(project_id: int) -> str:
 
 
 @app.tool()
-async def get_work_package_types() -> str:
+async def get_work_package_types(project_id: Optional[int] = None) -> str:
     """Get available work package types from OpenProject.
+    
+    Args:
+        project_id: Restrict results to the types enabled for this project
+                    (optional). Types are defined instance-wide, but each
+                    project enables only a subset of them.
     
     Returns:
         JSON string with list of work package types
     """
     try:
-        types = await openproject_client.get_work_package_types()
+        if project_id is not None and project_id <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "Project ID must be a positive integer"
+            })
+        
+        types = await openproject_client.get_work_package_types(project_id)
         
         type_list = []
         for wp_type in types:
@@ -1093,9 +1189,10 @@ async def get_work_package_types() -> str:
                 "is_milestone": wp_type.get("isMilestone", False)
             })
         
+        scope = f" in project {project_id}" if project_id else ""
         return json.dumps({
             "success": True,
-            "message": f"Found {len(type_list)} work package types",
+            "message": f"Found {len(type_list)} work package types{scope}",
             "types": type_list
         }, indent=2)
         

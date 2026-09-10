@@ -1004,3 +1004,311 @@ class TestHealthCheck:
 
             assert result_data["status"] == "unhealthy"
             assert "boom" in result_data["error"]
+
+
+class TestCreateWorkPackageFields:
+    """Tests for the type/priority/status parameters on create_work_package."""
+
+    SAMPLE_TYPES = [
+        {"id": 1, "name": "Task"},
+        {"id": 7, "name": "Bug"},
+        {"id": 2, "name": "Milestone"},
+    ]
+
+    SAMPLE_PRIORITIES = [
+        {"id": 7, "name": "Low"},
+        {"id": 8, "name": "Normal"},
+        {"id": 9, "name": "High"},
+    ]
+
+    SAMPLE_STATUSES = [
+        {"id": 1, "name": "New", "isClosed": False, "isDefault": True},
+        {"id": 2, "name": "In Progress", "isClosed": False, "isDefault": False},
+    ]
+
+    SAMPLE_VERSIONS = [{"id": 5, "name": "Sprint 1"}]
+
+    @pytest.fixture
+    def mock_client(self):
+        """Patch the shared client with all lookup endpoints mocked."""
+        created = {
+            "id": 123,
+            "subject": "Test Task",
+            "description": {"raw": ""},
+            "_links": {
+                "status": {"href": "/api/v3/statuses/1", "title": "New"},
+                "type": {"href": "/api/v3/types/7", "title": "Bug"},
+                "priority": {"href": "/api/v3/priorities/9", "title": "High"},
+            }
+        }
+        with patch('src.mcp_server.openproject_client') as client:
+            client.get_work_package_types = AsyncMock(return_value=self.SAMPLE_TYPES)
+            client.get_priorities = AsyncMock(return_value=self.SAMPLE_PRIORITIES)
+            client.get_work_package_statuses = AsyncMock(return_value=self.SAMPLE_STATUSES)
+            client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            client.create_work_package = AsyncMock(return_value=created)
+            yield client
+
+    @staticmethod
+    def _sent_request(mock_client):
+        """The WorkPackageCreateRequest handed to the client."""
+        return mock_client.create_work_package.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_create_with_type_by_name(self, mock_client):
+        """Test type is resolved by case-insensitive name, scoped to the project."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(project_id=7, subject="Test Task", type="bug")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        assert result_data["work_package"]["type"] == "Bug"
+        assert self._sent_request(mock_client).type_id == 7
+        # Type lookup restricted to the types enabled for the project
+        assert mock_client.get_work_package_types.call_args[0][0] == 7
+
+    @pytest.mark.asyncio
+    async def test_create_with_type_by_id(self, mock_client):
+        """Test type accepts an integer ID."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(project_id=7, subject="Test Task", type=2)
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        assert self._sent_request(mock_client).type_id == 2
+
+    @pytest.mark.asyncio
+    async def test_create_with_invalid_type(self, mock_client):
+        """Test an unknown type reports the project's available types."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(project_id=7, subject="Test Task", type="Epic")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is False
+        assert "Invalid type 'Epic' for project 7" in result_data["error"]
+        assert "Task, Bug, Milestone" in result_data["error"]
+        mock_client.create_work_package.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_with_priority_by_name(self, mock_client):
+        """Test priority is resolved by name."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(project_id=7, subject="Test Task", priority="High")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        assert result_data["work_package"]["priority"] == "High"
+        assert self._sent_request(mock_client).priority_id == 9
+
+    @pytest.mark.asyncio
+    async def test_create_with_invalid_priority_is_not_project_scoped(self, mock_client):
+        """Test priority errors omit the project, since priorities are instance-wide."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(project_id=7, subject="Test Task", priority="Urgent")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is False
+        assert "Invalid priority 'Urgent'." in result_data["error"]
+        assert "for project" not in result_data["error"]
+        assert "Low, Normal, High" in result_data["error"]
+
+    @pytest.mark.asyncio
+    async def test_create_with_status_by_name(self, mock_client):
+        """Test an initial status is resolved by name."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(
+            project_id=7, subject="Test Task", status="In Progress"
+        )
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        assert self._sent_request(mock_client).status_id == 2
+
+    @pytest.mark.asyncio
+    async def test_create_with_invalid_status(self, mock_client):
+        """Test an unknown status is rejected before calling the API."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(project_id=7, subject="Test Task", status="Wontfix")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is False
+        assert "Invalid status 'Wontfix'" in result_data["error"]
+        mock_client.create_work_package.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_all_fields_together(self, mock_client):
+        """Test type, priority, status and version resolve together."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(
+            project_id=7, subject="Test Task",
+            type="Bug", priority="Low", status="New", version="Sprint 1"
+        )
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        wp_request = self._sent_request(mock_client)
+        assert (wp_request.type_id, wp_request.priority_id) == (7, 7)
+        assert (wp_request.status_id, wp_request.version_id) == (1, 5)
+
+    @pytest.mark.asyncio
+    async def test_create_without_fields_keeps_defaults(self, mock_client):
+        """Test omitting the fields leaves the model defaults untouched."""
+        from src.mcp_server import create_work_package
+
+        result = await create_work_package.fn(project_id=7, subject="Test Task")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        wp_request = self._sent_request(mock_client)
+        assert (wp_request.type_id, wp_request.status_id, wp_request.priority_id) == (1, 1, 2)
+        assert wp_request.version_id is None
+        # No lookups performed when nothing needs resolving
+        mock_client.get_work_package_types.assert_not_called()
+        mock_client.get_priorities.assert_not_called()
+        mock_client.get_work_package_statuses.assert_not_called()
+
+
+class TestUpdateWorkPackageFields:
+    """Tests for the type/priority parameters on update_work_package."""
+
+    SAMPLE_TYPES = [{"id": 1, "name": "Task"}, {"id": 7, "name": "Bug"}]
+    SAMPLE_PRIORITIES = [{"id": 8, "name": "Normal"}, {"id": 9, "name": "High"}]
+    SAMPLE_STATUSES = [{"id": 1, "name": "New", "isClosed": False}]
+    SAMPLE_VERSIONS = [{"id": 5, "name": "Sprint 1"}]
+
+    @pytest.fixture
+    def mock_client(self):
+        """Patch the shared client with all lookup endpoints mocked."""
+        wp = {
+            "id": 123,
+            "subject": "Test Task",
+            "description": {"raw": ""},
+            "lockVersion": 3,
+            "_links": {
+                "project": {"href": "/api/v3/projects/7", "title": "Demo"},
+                "status": {"href": "/api/v3/statuses/1", "title": "New"},
+                "type": {"href": "/api/v3/types/7", "title": "Bug"},
+                "priority": {"href": "/api/v3/priorities/9", "title": "High"},
+            }
+        }
+        with patch('src.mcp_server.openproject_client') as client:
+            client.get_work_package_types = AsyncMock(return_value=self.SAMPLE_TYPES)
+            client.get_priorities = AsyncMock(return_value=self.SAMPLE_PRIORITIES)
+            client.get_work_package_statuses = AsyncMock(return_value=self.SAMPLE_STATUSES)
+            client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            client.get_work_package_by_id = AsyncMock(return_value=wp)
+            client.update_work_package = AsyncMock(return_value=wp)
+            yield client
+
+    @staticmethod
+    def _payload(mock_client):
+        """The update payload sent to the client."""
+        return mock_client.update_work_package.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_update_type_by_name(self, mock_client):
+        """Test type names resolve against the work package's own project."""
+        from src.mcp_server import update_work_package
+
+        result = await update_work_package.fn(work_package_id=123, type="bug")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        assert result_data["work_package"]["type"] == "Bug"
+        assert mock_client.get_work_package_types.call_args[0][0] == 7
+        payload = self._payload(mock_client)
+        assert payload["_links"]["type"] == {"href": "/api/v3/types/7"}
+        assert payload["lockVersion"] == 3
+
+    @pytest.mark.asyncio
+    async def test_update_type_by_id_skips_work_package_fetch(self, mock_client):
+        """Test a type ID needs no project lookup."""
+        from src.mcp_server import update_work_package
+
+        result = await update_work_package.fn(work_package_id=123, type=1)
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        mock_client.get_work_package_by_id.assert_not_called()
+        assert self._payload(mock_client)["_links"]["type"] == {"href": "/api/v3/types/1"}
+
+    @pytest.mark.asyncio
+    async def test_update_priority_by_name(self, mock_client):
+        """Test priorities are instance-wide, so no project lookup is needed."""
+        from src.mcp_server import update_work_package
+
+        result = await update_work_package.fn(work_package_id=123, priority="High")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        assert result_data["work_package"]["priority"] == "High"
+        mock_client.get_work_package_by_id.assert_not_called()
+        assert self._payload(mock_client)["_links"]["priority"] == {"href": "/api/v3/priorities/9"}
+
+    @pytest.mark.asyncio
+    async def test_update_invalid_type(self, mock_client):
+        """Test an unknown type is rejected with the available list."""
+        from src.mcp_server import update_work_package
+
+        result = await update_work_package.fn(work_package_id=123, type="Epic")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is False
+        assert "Invalid type 'Epic'" in result_data["error"]
+        assert "Task, Bug" in result_data["error"]
+        mock_client.update_work_package.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_invalid_priority(self, mock_client):
+        """Test an unknown priority is rejected with the available list."""
+        from src.mcp_server import update_work_package
+
+        result = await update_work_package.fn(work_package_id=123, priority="Urgent")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is False
+        assert "Invalid priority 'Urgent'" in result_data["error"]
+        assert "Normal, High" in result_data["error"]
+        mock_client.update_work_package.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_all_named_fields_fetches_project_once(self, mock_client):
+        """Test type and version names share a single work package fetch."""
+        from src.mcp_server import update_work_package
+
+        result = await update_work_package.fn(
+            work_package_id=123,
+            status="New", type="Bug", priority="High", version="Sprint 1"
+        )
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        assert mock_client.get_work_package_by_id.await_count == 1
+        links = self._payload(mock_client)["_links"]
+        assert links["status"] == {"href": "/api/v3/statuses/1"}
+        assert links["type"] == {"href": "/api/v3/types/7"}
+        assert links["priority"] == {"href": "/api/v3/priorities/9"}
+        assert links["version"] == {"href": "/api/v3/versions/5"}
+
+    @pytest.mark.asyncio
+    async def test_update_without_named_fields(self, mock_client):
+        """Test omitting the fields performs no lookups (backward compatible)."""
+        from src.mcp_server import update_work_package
+
+        result = await update_work_package.fn(work_package_id=123, subject="New Title")
+        result_data = json.loads(result)
+
+        assert result_data["success"] is True
+        payload = self._payload(mock_client)
+        assert payload == {"subject": "New Title"}
+        mock_client.get_work_package_types.assert_not_called()
+        mock_client.get_priorities.assert_not_called()
+        mock_client.get_work_package_by_id.assert_not_called()
