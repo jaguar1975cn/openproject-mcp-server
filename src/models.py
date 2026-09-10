@@ -63,6 +63,7 @@ class WorkPackageCreateRequest(BaseModel):
     priority_id: Optional[int] = 2
     assignee_id: Optional[int] = None
     parent_id: Optional[int] = None
+    version_id: Optional[int] = Field(None, gt=0)
     start_date: Optional[str] = None
     due_date: Optional[str] = None
     estimated_hours: Optional[float] = None

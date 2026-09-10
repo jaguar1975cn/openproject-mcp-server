@@ -189,6 +189,11 @@ class OpenProjectClient:
                 "href": f"/api/v3/work_packages/{work_package_data.parent_id}"
             }
         
+        if work_package_data.version_id:
+            payload["_links"]["version"] = {
+                "href": f"/api/v3/versions/{work_package_data.version_id}"
+            }
+        
         if work_package_data.start_date:
             payload["startDate"] = work_package_data.start_date
         
@@ -320,6 +325,22 @@ class OpenProjectClient:
     async def _fetch_work_package_types(self) -> List[Dict[str, Any]]:
         """Internal method to fetch work package types from API."""
         response = await self._make_request("GET", "/types")
+        return response.get("_embedded", {}).get("elements", [])
+
+    async def get_versions(self, project_id: Optional[int] = None, use_cache: bool = True) -> List[Dict[str, Any]]:
+        """Get available versions, globally or scoped to a single project."""
+        if use_cache:
+            cache_key = f"versions_project_{project_id}" if project_id else "versions"
+            return await self.get_cached_or_fetch(
+                cache_key,
+                lambda: self._fetch_versions(project_id)
+            )
+        return await self._fetch_versions(project_id)
+
+    async def _fetch_versions(self, project_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Internal method to fetch versions from API."""
+        url = f"/projects/{project_id}/versions" if project_id else "/versions"
+        response = await self._make_request("GET", url)
         return response.get("_embedded", {}).get("elements", [])
 
     async def get_work_package_statuses(self, use_cache: bool = True) -> List[Dict[str, Any]]:

@@ -373,6 +373,9 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `parent_id` (optional): Parent work package ID
   - `assignee_id` (optional): User ID to assign to
   - `estimated_hours` (optional): Estimated completion time
+  - `version` (optional): Version/milestone name (e.g., "Sprint 1") or version ID (e.g., 5). Case-insensitive; names are resolved within the target project.
+- **Response**: Includes `version` with the assigned version name (null if none)
+- **Error Handling**: Invalid version returns error with list of the project's available versions
 
 #### `create_work_package_dependency`
 - **Purpose**: Create dependencies between work packages for Gantt charts
@@ -431,6 +434,12 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
 - **Parameters**: None
 - **Returns**: List of priorities (Low, Normal, High, etc.) with configuration
 
+#### `get_versions`
+- **Purpose**: Get available versions (releases/milestones) from OpenProject
+- **Parameters**:
+  - `project_id` (optional): Restrict results to this project's versions. Version names are only unique per project, so pass this when looking up a name to assign to a work package.
+- **Returns**: List of versions with id, name, status, dates, sharing and defining project
+
 ### Additional Enhanced Tools
 
 #### `get_projects`
@@ -472,8 +481,9 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `assignee_id` (optional): New assignee
   - `estimated_hours` (optional): New time estimate
   - `status` (optional): Status name (e.g., "In Progress") or status ID (e.g., 2). Case-insensitive.
-- **Response**: Includes `is_closed` boolean indicating if the work package is in a closed status
-- **Error Handling**: Invalid status returns error with list of available statuses
+  - `version` (optional): Version/milestone name (e.g., "Sprint 1") or version ID (e.g., 5). Case-insensitive; names are resolved within the work package's own project.
+- **Response**: Includes `is_closed` boolean indicating if the work package is in a closed status, and `version` with the assigned version name (null if none)
+- **Error Handling**: Invalid status or version returns error with the list of available values
 
 #### `get_project_summary`
 - **Purpose**: Get comprehensive project overview

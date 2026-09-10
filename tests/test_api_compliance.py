@@ -701,3 +701,228 @@ class TestUpdateWorkPackageStatusResponse:
 
             assert result_data["success"] is True
             assert result_data["work_package"]["is_closed"] is False
+
+
+class TestWorkPackageVersion:
+    """Tests for the version parameter on create_work_package / update_work_package."""
+
+    SAMPLE_VERSIONS = [
+        {"id": 5, "name": "Sprint 1", "status": "open",
+         "_links": {"definingProject": {"title": "Demo"}}},
+        {"id": 6, "name": "Release 2.0", "status": "open",
+         "_links": {"definingProject": {"title": "Demo"}}},
+    ]
+
+    SAMPLE_STATUSES = [
+        {"id": 1, "name": "New", "isClosed": False, "isDefault": True, "position": 1},
+    ]
+
+    @pytest.fixture
+    def mock_wp_response(self):
+        """Mock work package response carrying a version link."""
+        return {
+            "id": 123,
+            "subject": "Test Task",
+            "description": {"raw": "Test description"},
+            "lockVersion": 3,
+            "_links": {
+                "project": {"href": "/api/v3/projects/7", "title": "Demo"},
+                "status": {"href": "/api/v3/statuses/1", "title": "New"},
+                "version": {"href": "/api/v3/versions/5", "title": "Sprint 1"},
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_client_create_payload_includes_version_link(self):
+        """Test the client maps version_id onto _links.version."""
+        client = OpenProjectClient()
+        client._make_request = AsyncMock(return_value={"id": 123})
+
+        await client.create_work_package(WorkPackageCreateRequest(
+            project_id=7, subject="Test Task", version_id=5
+        ))
+
+        payload = client._make_request.call_args[1]["json"]
+        assert payload["_links"]["version"] == {"href": "/api/v3/versions/5"}
+
+    @pytest.mark.asyncio
+    async def test_client_create_payload_omits_version_link(self):
+        """Test no version link is sent when version_id is not provided."""
+        client = OpenProjectClient()
+        client._make_request = AsyncMock(return_value={"id": 123})
+
+        await client.create_work_package(WorkPackageCreateRequest(
+            project_id=7, subject="Test Task"
+        ))
+
+        payload = client._make_request.call_args[1]["json"]
+        assert "version" not in payload["_links"]
+
+    @pytest.mark.asyncio
+    async def test_create_work_package_version_by_name(self, mock_wp_response):
+        """Test create_work_package resolves a version name within the project."""
+        from src.mcp_server import create_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.create_work_package = AsyncMock(return_value=mock_wp_response)
+
+            result = await create_work_package.fn(
+                project_id=7, subject="Test Task", version="sprint 1"
+            )
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            assert result_data["work_package"]["version"] == "Sprint 1"
+            # Version lookup must be scoped to the target project
+            assert mock_client.get_versions.call_args[0][0] == 7
+            wp_request = mock_client.create_work_package.call_args[0][0]
+            assert wp_request.version_id == 5
+
+    @pytest.mark.asyncio
+    async def test_create_work_package_version_by_id(self, mock_wp_response):
+        """Test create_work_package accepts a version ID."""
+        from src.mcp_server import create_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.create_work_package = AsyncMock(return_value=mock_wp_response)
+
+            result = await create_work_package.fn(
+                project_id=7, subject="Test Task", version=6
+            )
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            wp_request = mock_client.create_work_package.call_args[0][0]
+            assert wp_request.version_id == 6
+
+    @pytest.mark.asyncio
+    async def test_create_work_package_invalid_version(self):
+        """Test create_work_package reports available versions for an unknown one."""
+        from src.mcp_server import create_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.create_work_package = AsyncMock()
+
+            result = await create_work_package.fn(
+                project_id=7, subject="Test Task", version="Nope"
+            )
+            result_data = json.loads(result)
+
+            assert result_data["success"] is False
+            assert "Invalid version 'Nope'" in result_data["error"]
+            assert "Sprint 1" in result_data["error"]
+            mock_client.create_work_package.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_work_package_without_version(self, mock_wp_response):
+        """Test create_work_package stays backward compatible without version."""
+        from src.mcp_server import create_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.create_work_package = AsyncMock(return_value=mock_wp_response)
+
+            result = await create_work_package.fn(project_id=7, subject="Test Task")
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            mock_client.get_versions.assert_not_called()
+            wp_request = mock_client.create_work_package.call_args[0][0]
+            assert wp_request.version_id is None
+
+    @pytest.mark.asyncio
+    async def test_update_work_package_version_by_name(self, mock_wp_response):
+        """Test update_work_package resolves a version name via the WP's project."""
+        from src.mcp_server import update_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.get_work_package_by_id = AsyncMock(return_value=mock_wp_response)
+            mock_client.get_work_package_statuses = AsyncMock(return_value=self.SAMPLE_STATUSES)
+            mock_client.update_work_package = AsyncMock(return_value=mock_wp_response)
+
+            result = await update_work_package.fn(work_package_id=123, version="Sprint 1")
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            assert result_data["work_package"]["version"] == "Sprint 1"
+            # Name lookup scoped to the work package's own project (id 7)
+            assert mock_client.get_versions.call_args[0][0] == 7
+            payload = mock_client.update_work_package.call_args[0][1]
+            assert payload["_links"]["version"] == {"href": "/api/v3/versions/5"}
+            # lockVersion carried over from the fetch used for project scoping
+            assert payload["lockVersion"] == 3
+
+    @pytest.mark.asyncio
+    async def test_update_work_package_version_by_id(self, mock_wp_response):
+        """Test update_work_package accepts a version ID without fetching the WP."""
+        from src.mcp_server import update_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.get_work_package_by_id = AsyncMock(return_value=mock_wp_response)
+            mock_client.get_work_package_statuses = AsyncMock(return_value=self.SAMPLE_STATUSES)
+            mock_client.update_work_package = AsyncMock(return_value=mock_wp_response)
+
+            result = await update_work_package.fn(work_package_id=123, version=6)
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            mock_client.get_work_package_by_id.assert_not_called()
+            payload = mock_client.update_work_package.call_args[0][1]
+            assert payload["_links"]["version"] == {"href": "/api/v3/versions/6"}
+
+    @pytest.mark.asyncio
+    async def test_update_work_package_invalid_version(self, mock_wp_response):
+        """Test update_work_package rejects an unknown version."""
+        from src.mcp_server import update_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.get_work_package_by_id = AsyncMock(return_value=mock_wp_response)
+            mock_client.update_work_package = AsyncMock()
+
+            result = await update_work_package.fn(work_package_id=123, version="Nope")
+            result_data = json.loads(result)
+
+            assert result_data["success"] is False
+            assert "Invalid version 'Nope'" in result_data["error"]
+            mock_client.update_work_package.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_work_package_empty_version_ignored(self, mock_wp_response):
+        """Test an empty version string leaves the field untouched."""
+        from src.mcp_server import update_work_package
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+            mock_client.get_work_package_statuses = AsyncMock(return_value=self.SAMPLE_STATUSES)
+            mock_client.update_work_package = AsyncMock(return_value=mock_wp_response)
+
+            result = await update_work_package.fn(
+                work_package_id=123, subject="New Title", version=""
+            )
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            payload = mock_client.update_work_package.call_args[0][1]
+            assert "version" not in payload.get("_links", {})
+            mock_client.get_versions.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_versions_tool(self):
+        """Test the get_versions tool lists versions for a project."""
+        from src.mcp_server import get_versions
+
+        with patch('src.mcp_server.openproject_client') as mock_client:
+            mock_client.get_versions = AsyncMock(return_value=self.SAMPLE_VERSIONS)
+
+            result = await get_versions.fn(project_id=7)
+            result_data = json.loads(result)
+
+            assert result_data["success"] is True
+            assert [v["name"] for v in result_data["versions"]] == ["Sprint 1", "Release 2.0"]
+            assert result_data["versions"][0]["id"] == 5

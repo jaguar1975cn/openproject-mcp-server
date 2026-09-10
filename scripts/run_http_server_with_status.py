@@ -15,6 +15,33 @@ from urllib.parse import urlparse
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+# Cached tool names, read from the MCP app on first use
+_mcp_tool_names = None
+
+
+def get_mcp_tool_names():
+    """Get the registered MCP tool names from the app itself.
+
+    Derived from the running FastMCP app so the status endpoint cannot drift
+    out of sync with the tools defined in mcp_server.py.
+    """
+    global _mcp_tool_names
+
+    if _mcp_tool_names is None:
+        from mcp_server import app
+
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            _mcp_tool_names = sorted(loop.run_until_complete(app.get_tools()))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    return _mcp_tool_names
+
+
 class StatusHandler(BaseHTTPRequestHandler):
     """HTTP handler for status endpoints."""
     
@@ -95,19 +122,17 @@ class StatusHandler(BaseHTTPRequestHandler):
                 "/health": "Health check with OpenProject connection status",
                 "/": "Basic server information"
             },
-            "mcp_tools": [
-                "health_check",
-                "create_project",
-                "create_work_package", 
-                "create_work_package_dependency",
-                "get_projects",
-                "get_work_packages"
-            ],
+            "mcp_tools": [],
             "ports": {
                 "mcp_sse": 39127,
                 "http_status": 39128
             }
         }
+        
+        try:
+            result["mcp_tools"] = get_mcp_tool_names()
+        except Exception as e:
+            result["mcp_tools_error"] = f"Could not list MCP tools: {e}"
         
         self.send_response(200)
         self.send_header('Content-type', 'application/json')

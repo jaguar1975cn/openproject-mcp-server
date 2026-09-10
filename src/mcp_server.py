@@ -57,6 +57,48 @@ async def _resolve_status(status: Optional[Union[str, int]]) -> Optional[Dict[st
         return next((s for s in statuses if s.get("name", "").lower() == status_lower), None)
 
 
+async def _resolve_version(
+    version: Optional[Union[str, int]],
+    project_id: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    """Resolve a version name or ID to a version dict.
+
+    Args:
+        version: Version name (string, case-insensitive) or version ID (integer).
+                 None or empty string returns None.
+        project_id: Restrict the lookup to this project's versions. Recommended for
+                    name lookups, since version names are only unique per project.
+
+    Returns:
+        Version dict with id, name, etc. or None if not found/invalid.
+    """
+    if version is None:
+        return None
+
+    if isinstance(version, str):
+        version_str = version.strip()
+        if not version_str:
+            return None
+
+    # Fetch available versions (uses cached data with 5-min TTL)
+    versions = await openproject_client.get_versions(project_id)
+
+    if isinstance(version, int):
+        # Direct ID lookup - must be positive
+        if version <= 0:
+            return None
+        return next((v for v in versions if v.get("id") == version), None)
+
+    # Case-insensitive name lookup
+    version_lower = version.strip().lower()
+    return next((v for v in versions if v.get("name", "").lower() == version_lower), None)
+
+
+def _version_title(work_package: Dict[str, Any]) -> Optional[str]:
+    """Extract the version name from a work package API response."""
+    return work_package.get("_links", {}).get("version", {}).get("title")
+
+
 # Add health check tool for MCP
 @app.tool()
 async def health_check() -> str:
@@ -161,7 +203,8 @@ async def create_work_package(
     due_date: Optional[str] = None,
     parent_id: Optional[int] = None,
     assignee_id: Optional[int] = None,
-    estimated_hours: Optional[float] = None
+    estimated_hours: Optional[float] = None,
+    version: Optional[Union[str, int]] = None
 ) -> str:
     """Create a work package in a project with dates for Gantt chart.
     
@@ -174,6 +217,8 @@ async def create_work_package(
         parent_id: Parent work package ID for hierarchy (optional)
         assignee_id: User ID to assign work package to (optional)
         estimated_hours: Estimated hours for completion (optional)
+        version: Version/milestone name (string, case-insensitive) or version ID
+                 (integer) to assign the work package to (optional)
     
     Returns:
         JSON string with work package creation result
@@ -205,6 +250,20 @@ async def create_work_package(
                 "error": "Due date must be in YYYY-MM-DD format"
             })
         
+        # Resolve version (scoped to the target project) if provided
+        version_id = None
+        if version is not None and version != "":
+            resolved_version = await _resolve_version(version, project_id)
+            if not resolved_version:
+                versions = await openproject_client.get_versions(project_id)
+                available_names = [v.get("name") for v in versions]
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid version '{version}' for project {project_id}. "
+                             f"Available versions: {', '.join(available_names) or 'none'}"
+                })
+            version_id = resolved_version["id"]
+        
         # Create work package request
         wp_request = WorkPackageCreateRequest(
             project_id=project_id,
@@ -214,7 +273,8 @@ async def create_work_package(
             due_date=due_date,
             parent_id=parent_id,
             assignee_id=assignee_id,
-            estimated_hours=estimated_hours
+            estimated_hours=estimated_hours,
+            version_id=version_id
         )
         
         # Call OpenProject API
@@ -231,6 +291,7 @@ async def create_work_package(
                 "start_date": result.get("startDate"),
                 "due_date": result.get("dueDate"),
                 "status": result.get("_links", {}).get("status", {}).get("title", "Unknown"),
+                "version": _version_title(result),
                 "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
             }
         }, indent=2)
@@ -660,7 +721,8 @@ async def update_work_package(
     due_date: Optional[str] = None,
     assignee_id: Optional[int] = None,
     estimated_hours: Optional[float] = None,
-    status: Optional[Union[str, int]] = None
+    status: Optional[Union[str, int]] = None,
+    version: Optional[Union[str, int]] = None
 ) -> str:
     """Update an existing work package.
 
@@ -673,6 +735,8 @@ async def update_work_package(
         assignee_id: User ID to assign work package to (optional)
         estimated_hours: New estimated hours (optional)
         status: Status name (string, case-insensitive) or status ID (integer) (optional)
+        version: Version/milestone name (string, case-insensitive) or version ID
+                 (integer) to assign the work package to (optional)
 
     Returns:
         JSON string with update result
@@ -731,6 +795,35 @@ async def update_work_package(
                     "error": f"Invalid status '{status}'. Available statuses: {', '.join(available_names)}"
                 })
 
+        # Handle version update
+        if version is not None and version != "":
+            # Version names are only unique per project, so scope name lookups to the
+            # work package's own project. Reuse the fetched lockVersion to avoid a
+            # second round trip inside the client.
+            project_id = None
+            if isinstance(version, str):
+                wp = await openproject_client.get_work_package_by_id(work_package_id)
+                updates.setdefault("lockVersion", wp.get("lockVersion"))
+                project_href = wp.get("_links", {}).get("project", {}).get("href", "")
+                try:
+                    project_id = int(project_href.split("/")[-1])
+                except (ValueError, IndexError):
+                    project_id = None
+
+            resolved_version = await _resolve_version(version, project_id)
+            if resolved_version:
+                updates["_links"] = updates.get("_links", {})
+                updates["_links"]["version"] = {"href": f"/api/v3/versions/{resolved_version['id']}"}
+            else:
+                # Invalid version - return error with available versions
+                versions = await openproject_client.get_versions(project_id)
+                available_names = [v.get("name") for v in versions]
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid version '{version}'. "
+                             f"Available versions: {', '.join(available_names) or 'none'}"
+                })
+
         if not updates:
             return json.dumps({
                 "success": False,
@@ -764,6 +857,7 @@ async def update_work_package(
                 "due_date": result.get("dueDate"),
                 "status": result.get("_links", {}).get("status", {}).get("title", "Unknown"),
                 "is_closed": is_closed,
+                "version": _version_title(result),
                 "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
             }
         }, indent=2)
@@ -999,6 +1093,60 @@ async def get_work_package_types() -> str:
             "types": type_list
         }, indent=2)
         
+    except OpenProjectAPIError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"OpenProject API error: {e.message}",
+            "details": e.response_data
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+@app.tool()
+async def get_versions(project_id: Optional[int] = None) -> str:
+    """Get available versions (releases/milestones) from OpenProject.
+
+    Args:
+        project_id: Restrict results to this project's versions (optional).
+                    Version names are only unique per project, so pass this when
+                    looking up a name to assign to a work package.
+
+    Returns:
+        JSON string with list of versions
+    """
+    try:
+        if project_id is not None and project_id <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "Project ID must be a positive integer"
+            })
+
+        versions = await openproject_client.get_versions(project_id)
+
+        version_list = []
+        for version in versions:
+            version_list.append({
+                "id": version.get("id"),
+                "name": version.get("name"),
+                "description": version.get("description", {}).get("raw", ""),
+                "status": version.get("status", ""),
+                "start_date": version.get("startDate"),
+                "end_date": version.get("endDate"),
+                "sharing": version.get("sharing", ""),
+                "project": version.get("_links", {}).get("definingProject", {}).get("title", "")
+            })
+
+        scope = f" in project {project_id}" if project_id else ""
+        return json.dumps({
+            "success": True,
+            "message": f"Found {len(version_list)} versions{scope}",
+            "versions": version_list
+        }, indent=2)
+
     except OpenProjectAPIError as e:
         return json.dumps({
             "success": False,

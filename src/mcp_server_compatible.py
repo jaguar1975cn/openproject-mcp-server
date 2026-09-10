@@ -146,7 +146,8 @@ class MCPServer:
             due_date: Optional[str] = None,
             parent_id: Optional[int] = None,
             assignee_id: Optional[int] = None,
-            estimated_hours: Optional[float] = None
+            estimated_hours: Optional[float] = None,
+            version_id: Optional[int] = None
         ) -> str:
             """Create a work package in a project with dates for Gantt chart."""
             try:
@@ -170,7 +171,8 @@ class MCPServer:
                     due_date=due_date,
                     parent_id=parent_id,
                     assignee_id=assignee_id,
-                    estimated_hours=estimated_hours
+                    estimated_hours=estimated_hours,
+                    version_id=version_id
                 )
                 
                 result = await openproject_client.create_work_package(wp_request)
@@ -186,6 +188,7 @@ class MCPServer:
                         "start_date": result.get("startDate"),
                         "due_date": result.get("dueDate"),
                         "status": result.get("_links", {}).get("status", {}).get("title", "Unknown"),
+                        "version": result.get("_links", {}).get("version", {}).get("title"),
                         "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
                     }
                 }, indent=2)
