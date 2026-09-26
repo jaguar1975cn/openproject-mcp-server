@@ -179,6 +179,17 @@ class OpenProjectClient:
             f"/projects/{project_id}/work_packages", params, max_results
         )
     
+    @staticmethod
+    def version_links(version_id: int) -> Dict[str, Any]:
+        """Build the _links entries that assign a work package to a version.
+        
+        Instances that allow several versions per work package only accept a
+        `targetVersions` list and silently ignore `version`; older instances
+        only know `version`. Sending both works on either.
+        """
+        href = f"/api/v3/versions/{version_id}"
+        return {"version": {"href": href}, "targetVersions": [{"href": href}]}
+    
     async def create_work_package(self, work_package_data: WorkPackageCreateRequest) -> Dict[str, Any]:
         """Create a new work package."""
         payload = {
@@ -214,8 +225,13 @@ class OpenProjectClient:
             }
         
         if work_package_data.version_id:
-            payload["_links"]["version"] = {
-                "href": f"/api/v3/versions/{work_package_data.version_id}"
+            payload["_links"].update(
+                self.version_links(work_package_data.version_id)
+            )
+        
+        if work_package_data.sprint_id:
+            payload["_links"]["sprint"] = {
+                "href": f"/api/v3/sprints/{work_package_data.sprint_id}"
             }
         
         if work_package_data.start_date:
@@ -372,6 +388,17 @@ class OpenProjectClient:
         url = f"/projects/{project_id}/versions" if project_id else "/versions"
         response = await self._make_request("GET", url)
         return response.get("_embedded", {}).get("elements", [])
+
+    async def get_sprints(self, project_id: Optional[int] = None, use_cache: bool = True) -> List[Dict[str, Any]]:
+        """Get sprints, globally or for the sprints available to a single project."""
+        url = f"/projects/{project_id}/sprints" if project_id else "/sprints"
+        if use_cache:
+            cache_key = f"sprints_project_{project_id}" if project_id else "sprints"
+            return await self.get_cached_or_fetch(
+                cache_key,
+                lambda: self.get_paginated_results(url)
+            )
+        return await self.get_paginated_results(url)
 
     async def get_work_package_statuses(self, use_cache: bool = True) -> List[Dict[str, Any]]:
         """Get available work package statuses."""

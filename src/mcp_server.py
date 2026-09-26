@@ -134,6 +134,32 @@ async def _resolve_version(
     return _match_named(await openproject_client.get_versions(project_id), version)
 
 
+async def _resolve_sprint(
+    sprint: Optional[Union[str, int]],
+    project_id: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    """Resolve a sprint name or ID to a sprint dict.
+
+    Args:
+        sprint: Sprint name (string, case-insensitive) or sprint ID (integer).
+                None or empty string returns None.
+        project_id: Restrict the lookup to the sprints available to this project.
+
+    Returns:
+        Sprint dict with id, name, etc. or None if not found/invalid.
+    """
+    if sprint is None:
+        return None
+
+    # Fetch available sprints (uses cached data with 5-min TTL)
+    return _match_named(await openproject_client.get_sprints(project_id), sprint)
+
+
+def _sprint_title(work_package: Dict[str, Any]) -> Optional[str]:
+    """Extract the sprint name from a work package API response."""
+    return (work_package.get("_links", {}).get("sprint") or {}).get("title")
+
+
 def _version_title(work_package: Dict[str, Any]) -> Optional[str]:
     """Extract the version name from a work package API response.
 
@@ -262,7 +288,8 @@ async def create_work_package(
     version: Optional[Union[str, int]] = None,
     type: Optional[Union[str, int]] = None,
     priority: Optional[Union[str, int]] = None,
-    status: Optional[Union[str, int]] = None
+    status: Optional[Union[str, int]] = None,
+    sprint: Optional[Union[str, int]] = None
 ) -> str:
     """Create a work package in a project with dates for Gantt chart.
     
@@ -284,6 +311,9 @@ async def create_work_package(
         status: Initial status name (e.g. "New") or status ID (optional, defaults
                 to the default status; OpenProject workflow rules may reject a
                 status that is not a valid starting point)
+        sprint: Sprint name (string, case-insensitive) or sprint ID (integer) to
+                plan the work package into (optional). Sprints are separate from
+                versions; setting one does not set the other.
     
     Returns:
         JSON string with work package creation result
@@ -315,8 +345,8 @@ async def create_work_package(
                 "error": "Due date must be in YYYY-MM-DD format"
             })
         
-        # Resolve the named fields to IDs. Types and versions are per-project;
-        # statuses and priorities are instance-wide.
+        # Resolve the named fields to IDs. Types, versions and sprints are
+        # per-project; statuses and priorities are instance-wide.
         resolved_ids = {}
         for field, value, resolve, fetch_available, scoped in (
             ("type", type,
@@ -325,6 +355,9 @@ async def create_work_package(
             ("version", version,
              lambda v: _resolve_version(v, project_id),
              lambda: openproject_client.get_versions(project_id), True),
+            ("sprint", sprint,
+             lambda v: _resolve_sprint(v, project_id),
+             lambda: openproject_client.get_sprints(project_id), True),
             ("status", status, _resolve_status,
              openproject_client.get_work_package_statuses, False),
             ("priority", priority, _resolve_priority,
@@ -361,6 +394,7 @@ async def create_work_package(
             assignee_id=assignee_id,
             estimated_hours=estimated_hours,
             version_id=resolved_ids.get("version"),
+            sprint_id=resolved_ids.get("sprint"),
             **optional_ids
         )
         
@@ -381,6 +415,7 @@ async def create_work_package(
                 "type": result.get("_links", {}).get("type", {}).get("title"),
                 "priority": result.get("_links", {}).get("priority", {}).get("title"),
                 "version": _version_title(result),
+                "sprint": _sprint_title(result),
                 "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
             }
         }, indent=2)
@@ -668,6 +703,7 @@ async def get_work_package(work_package_id: int) -> str:
             "type": wp.get("_links", {}).get("type", {}).get("title"),
             "priority": wp.get("_links", {}).get("priority", {}).get("title"),
             "version": _version_title(wp),
+            "sprint": _sprint_title(wp),
             "assignee": wp.get("_links", {}).get("assignee", {}).get("title"),
             "responsible": wp.get("_links", {}).get("responsible", {}).get("title"),
             "project_id": project_id,
@@ -754,6 +790,7 @@ def _parse_iso_duration(duration: str) -> float:
 async def get_work_packages(
     project_id: int,
     version: Optional[Union[str, int]] = None,
+    sprint: Optional[Union[str, int]] = None,
     status: Optional[Union[str, int]] = "open",
     exclude_status: Optional[Union[str, int, List[Union[str, int]]]] = None,
     max_results: Optional[int] = 100
@@ -764,6 +801,9 @@ async def get_work_packages(
         project_id: ID of the project to get work packages from
         version: Only return work packages in this version/milestone, given as
                  name (case-insensitive) or version ID (optional)
+        sprint: Only return work packages planned into this sprint, given as
+                name (case-insensitive) or sprint ID (optional). Sprints are
+                separate from versions, even where their names match.
         status: "open" (default), "closed", "all", or a specific status name
                 (case-insensitive) or status ID
         exclude_status: Status name(s) or ID(s) to leave out, as a single value
@@ -855,6 +895,16 @@ async def get_work_packages(
                 })
             filters.append({"version": {"operator": "=", "values": [str(resolved_version["id"])]}})
         
+        if sprint is not None and sprint != "":
+            resolved_sprint = await _resolve_sprint(sprint, project_id)
+            if not resolved_sprint:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid sprint '{sprint}' for project {project_id}. "
+                             f"Available sprints: {_available_names(await openproject_client.get_sprints(project_id))}"
+                })
+            filters.append({"sprint": {"operator": "=", "values": [str(resolved_sprint["id"])]}})
+        
         work_packages, total = await openproject_client.query_work_packages(
             project_id, filters=filters, max_results=max_results
         )
@@ -871,6 +921,7 @@ async def get_work_packages(
                 "status": wp.get("_links", {}).get("status", {}).get("title", "Unknown"),
                 "assignee": wp.get("_links", {}).get("assignee", {}).get("title", "Unassigned"),
                 "version": _version_title(wp),
+                "sprint": _sprint_title(wp),
                 "url": f"{settings.openproject_url}/work_packages/{wp.get('id')}"
             })
         
@@ -913,7 +964,8 @@ async def update_work_package(
     status: Optional[Union[str, int]] = None,
     version: Optional[Union[str, int]] = None,
     type: Optional[Union[str, int]] = None,
-    priority: Optional[Union[str, int]] = None
+    priority: Optional[Union[str, int]] = None,
+    sprint: Optional[Union[str, int]] = None
 ) -> str:
     """Update an existing work package.
 
@@ -930,6 +982,9 @@ async def update_work_package(
                  (integer) to assign the work package to (optional)
         type: Type name (e.g. "Task", "Bug", "Milestone") or type ID (optional)
         priority: Priority name (e.g. "High") or priority ID (optional)
+        sprint: Sprint name (string, case-insensitive) or sprint ID (integer) to
+                plan the work package into (optional). Sprints are separate from
+                versions; setting one does not set the other.
 
     Returns:
         JSON string with update result
@@ -973,7 +1028,7 @@ async def update_work_package(
         if estimated_hours:
             updates["estimatedTime"] = f"PT{estimated_hours}H"
 
-        # Type and version names are only meaningful within a project, so
+        # Type, version and sprint names are only meaningful within a project, so
         # resolving one by name needs the work package's own project. Fetch the
         # work package at most once for that, reusing its lockVersion to avoid a
         # second round trip inside the client.
@@ -1004,6 +1059,9 @@ async def update_work_package(
             ("version", version, "versions", True,
              lambda v, p: _resolve_version(v, p),
              lambda p: openproject_client.get_versions(p)),
+            ("sprint", sprint, "sprints", True,
+             lambda v, p: _resolve_sprint(v, p),
+             lambda p: openproject_client.get_sprints(p)),
         ):
             if value is None or value == "":
                 continue
@@ -1020,7 +1078,10 @@ async def update_work_package(
                 })
             
             updates["_links"] = updates.get("_links", {})
-            updates["_links"][field] = {"href": f"/api/v3/{path}/{resolved['id']}"}
+            if field == "version":
+                updates["_links"].update(OpenProjectClient.version_links(resolved["id"]))
+            else:
+                updates["_links"][field] = {"href": f"/api/v3/{path}/{resolved['id']}"}
 
         if not updates:
             return json.dumps({
@@ -1058,6 +1119,7 @@ async def update_work_package(
                 "type": result.get("_links", {}).get("type", {}).get("title"),
                 "priority": result.get("_links", {}).get("priority", {}).get("title"),
                 "version": _version_title(result),
+                "sprint": _sprint_title(result),
                 "url": f"{settings.openproject_url}/work_packages/{result.get('id')}"
             }
         }, indent=2)
@@ -1357,6 +1419,62 @@ async def get_versions(project_id: Optional[int] = None) -> str:
             "success": True,
             "message": f"Found {len(version_list)} versions{scope}",
             "versions": version_list
+        }, indent=2)
+
+    except OpenProjectAPIError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"OpenProject API error: {e.message}",
+            "details": e.response_data
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+@app.tool()
+async def get_sprints(project_id: Optional[int] = None) -> str:
+    """Get sprints from OpenProject.
+
+    Sprints are separate from versions: a work package has its own sprint
+    field, and sprint IDs differ from version IDs even where names match.
+
+    Args:
+        project_id: Restrict results to the sprints available to this project
+                    (optional). Pass this when looking up a sprint name to plan
+                    a work package into.
+
+    Returns:
+        JSON string with list of sprints
+    """
+    try:
+        if project_id is not None and project_id <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "Project ID must be a positive integer"
+            })
+
+        sprints = await openproject_client.get_sprints(project_id)
+
+        sprint_list = []
+        for sprint in sprints:
+            links = sprint.get("_links", {})
+            sprint_list.append({
+                "id": sprint.get("id"),
+                "name": sprint.get("name"),
+                "status": (links.get("status") or {}).get("title"),
+                "start_date": sprint.get("startDate"),
+                "finish_date": sprint.get("finishDate"),
+                "project": (links.get("definingWorkspace") or {}).get("title")
+            })
+
+        scope = f" in project {project_id}" if project_id else ""
+        return json.dumps({
+            "success": True,
+            "message": f"Found {len(sprint_list)} sprints{scope}",
+            "sprints": sprint_list
         }, indent=2)
 
     except OpenProjectAPIError as e:

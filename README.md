@@ -373,12 +373,13 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `parent_id` (optional): Parent work package ID
   - `assignee_id` (optional): User ID to assign to
   - `estimated_hours` (optional): Estimated completion time
-  - `version` (optional): Version/milestone name (e.g., "Sprint 1") or version ID (e.g., 5). Case-insensitive; names are resolved within the target project.
+  - `version` (optional): Version/milestone name (e.g., "Release 2.0") or version ID (e.g., 5). Case-insensitive; names are resolved within the target project. Works with both single-version and multi-version (`targetVersions`) OpenProject instances.
+  - `sprint` (optional): Sprint name or sprint ID. Case-insensitive; names are resolved within the target project. Sprints are separate from versions: setting one does not set the other.
   - `type` (optional): Type name (e.g., "Bug", "Milestone") or type ID. Case-insensitive; validated against the types enabled for the project. Defaults to the instance default type.
   - `priority` (optional): Priority name (e.g., "High") or priority ID. Case-insensitive. Defaults to Normal.
   - `status` (optional): Initial status name (e.g., "New") or status ID. Case-insensitive. Defaults to the default status; OpenProject workflow rules may reject a status that is not a valid starting point.
-- **Response**: Includes `type`, `priority`, `status` and `version` as resolved by OpenProject (`version` is null if none)
-- **Error Handling**: An invalid type, priority, status or version returns an error listing the available values
+- **Response**: Includes `type`, `priority`, `status`, `version` and `sprint` as resolved by OpenProject (`version`/`sprint` are null if none)
+- **Error Handling**: An invalid type, priority, status, version or sprint returns an error listing the available values
 
 #### `create_work_package_dependency`
 - **Purpose**: Create dependencies between work packages for Gantt charts
@@ -444,6 +445,12 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `project_id` (optional): Restrict results to this project's versions. Version names are only unique per project, so pass this when looking up a name to assign to a work package.
 - **Returns**: List of versions with id, name, status, dates, sharing and defining project
 
+#### `get_sprints`
+- **Purpose**: Get sprints from OpenProject. Sprints are separate from versions, with their own IDs, even where names match.
+- **Parameters**:
+  - `project_id` (optional): Restrict results to the sprints available to this project. Pass this when looking up a sprint name to plan a work package into.
+- **Returns**: List of sprints with id, name, status (e.g., "In planning", "Completed"), start_date, finish_date and defining project
+
 ### Additional Enhanced Tools
 
 #### `get_projects`
@@ -456,11 +463,12 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
 - **Parameters**:
   - `project_id` (required): Project ID to get work packages from
   - `version` (optional): Only return work packages in this version/milestone, as name (e.g., "Sprint 1") or version ID. Case-insensitive; names are resolved within the project.
+  - `sprint` (optional): Only return work packages planned into this sprint, as name or sprint ID. Case-insensitive; names are resolved within the project.
   - `status` (optional, default `"open"`): `"open"`, `"closed"`, `"all"`, or a specific status name or ID. Case-insensitive.
   - `exclude_status` (optional): Status name(s) or ID(s) to leave out, as a single value or a list (e.g., `["On hold", "Rejected"]`). Combines with `status`, e.g. `status="open", exclude_status="On hold"`.
   - `max_results` (optional, default 100): Maximum number of work packages to return; `null` returns every match. All result pages are fetched automatically up to this limit.
-- **Returns**: List of work packages (id, subject, description, dates, status, assignee, version, url), plus `total` (all matches), `returned`, and `truncated` (true when `max_results` cut the list short)
-- **Error Handling**: An invalid version or status returns an error listing the available values
+- **Returns**: List of work packages (id, subject, description, dates, status, assignee, version, sprint, url), plus `total` (all matches), `returned`, and `truncated` (true when `max_results` cut the list short)
+- **Error Handling**: An invalid version, sprint or status returns an error listing the available values
 
 #### `get_work_package`
 - **Purpose**: Get all details of a specific work package by ID
@@ -470,6 +478,7 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - Basic info: id, subject, description
   - Status, type, priority
   - Version: assigned version/milestone name (null if none; comma-separated when the instance allows several versions per work package)
+  - Sprint: sprint name (null if none)
   - Assignee and responsible person
   - Project info: project_id, project_name
   - Dates: start_date, due_date, created_at, updated_at
@@ -491,11 +500,12 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
   - `assignee_id` (optional): New assignee
   - `estimated_hours` (optional): New time estimate
   - `status` (optional): Status name (e.g., "In Progress") or status ID (e.g., 2). Case-insensitive.
-  - `version` (optional): Version/milestone name (e.g., "Sprint 1") or version ID (e.g., 5). Case-insensitive; names are resolved within the work package's own project.
+  - `version` (optional): Version/milestone name (e.g., "Release 2.0") or version ID (e.g., 5). Case-insensitive; names are resolved within the work package's own project. On multi-version instances this replaces the work package's versions with this one.
+  - `sprint` (optional): Sprint name or sprint ID. Case-insensitive; names are resolved within the work package's own project. OpenProject rejects a sprint that is finished or not shared with the project.
   - `type` (optional): Type name (e.g., "Bug", "Milestone") or type ID. Case-insensitive; names are validated against the types enabled for the work package's project.
   - `priority` (optional): Priority name (e.g., "High") or priority ID. Case-insensitive.
-- **Response**: Includes `is_closed` boolean indicating if the work package is in a closed status, plus `type`, `priority` and `version` (null if no version is assigned)
-- **Error Handling**: An invalid status, type, priority or version returns an error listing the available values
+- **Response**: Includes `is_closed` boolean indicating if the work package is in a closed status, plus `type`, `priority`, `version` and `sprint` (null if none is assigned)
+- **Error Handling**: An invalid status, type, priority, version or sprint returns an error listing the available values
 
 #### `get_project_summary`
 - **Purpose**: Get comprehensive project overview
