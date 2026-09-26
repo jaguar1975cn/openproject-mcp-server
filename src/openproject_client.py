@@ -1,7 +1,7 @@
 """OpenProject API client for MCP server."""
 import json
 import base64
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import httpx
 from config import settings
@@ -154,6 +154,30 @@ class OpenProjectClient:
             return await self.get_paginated_results(url)
         response = await self._make_request("GET", url)
         return response.get("_embedded", {}).get("elements", [])
+    
+    async def query_work_packages(
+        self,
+        project_id: int,
+        filters: Optional[List[Dict[str, Any]]] = None,
+        max_results: Optional[int] = None
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Get a project's work packages matching OpenProject API filters.
+        
+        Args:
+            project_id: Project to query.
+            filters: OpenProject filter list, e.g. [{"version": {"operator": "=", "values": ["3"]}}].
+                     When None, OpenProject applies its default filter (open work packages only).
+            max_results: Stop after this many work packages (None fetches every page).
+        
+        Returns:
+            Tuple of (work packages, total number of matching work packages).
+        """
+        params = {}
+        if filters is not None:
+            params["filters"] = json.dumps(filters)
+        return await self._collect_pages(
+            f"/projects/{project_id}/work_packages", params, max_results
+        )
     
     async def create_work_package(self, work_package_data: WorkPackageCreateRequest) -> Dict[str, Any]:
         """Create a new work package."""
@@ -411,31 +435,51 @@ class OpenProjectClient:
 
     async def get_paginated_results(self, endpoint: str, params: Optional[Dict] = None) -> List[Dict]:
         """Handle paginated responses from OpenProject API."""
+        results, _ = await self._collect_pages(endpoint, params)
+        return results
+    
+    async def _collect_pages(
+        self,
+        endpoint: str,
+        params: Optional[Dict] = None,
+        max_results: Optional[int] = None
+    ) -> Tuple[List[Dict], int]:
+        """Fetch pages until all results (or max_results) are collected.
+        
+        OpenProject's `offset` is a 1-based page number, not an item offset.
+        
+        Returns:
+            Tuple of (results, total reported by the API).
+        """
         all_results = []
-        page_size = 100  # OpenProject default
-        offset = 0
+        page_size = 100  # Default maximum page size of OpenProject
+        if max_results is not None:
+            page_size = min(page_size, max_results)
+        page = 1
+        total = 0
         
         while True:
-            paginated_params = {"pageSize": page_size, "offset": offset}
+            paginated_params = {"pageSize": page_size, "offset": page}
             if params:
                 paginated_params.update(params)
                 
             response = await self._make_request("GET", endpoint, params=paginated_params)
             elements = response.get("_embedded", {}).get("elements", [])
+            total = response.get("total", len(all_results) + len(elements))
             
             if not elements:
                 break
                 
             all_results.extend(elements)
             
-            # Check if we have more pages
-            total = response.get("total", 0)
-            if offset + page_size >= total:
+            if max_results is not None and len(all_results) >= max_results:
+                return all_results[:max_results], total
+            if len(all_results) >= total:
                 break
                 
-            offset += page_size
+            page += 1
         
-        return all_results
+        return all_results, total
 
     async def close(self):
         """Close the HTTP client."""

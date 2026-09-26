@@ -135,8 +135,18 @@ async def _resolve_version(
 
 
 def _version_title(work_package: Dict[str, Any]) -> Optional[str]:
-    """Extract the version name from a work package API response."""
-    return work_package.get("_links", {}).get("version", {}).get("title")
+    """Extract the version name from a work package API response.
+
+    Instances that allow several versions per work package return a
+    `targetVersions` list instead of a single `version` link; their titles
+    are joined with ", ".
+    """
+    links = work_package.get("_links", {})
+    title = (links.get("version") or {}).get("title")
+    if title:
+        return title
+    titles = [v.get("title") for v in links.get("targetVersions") or [] if v.get("title")]
+    return ", ".join(titles) or None
 
 
 # Add health check tool for MCP
@@ -741,14 +751,30 @@ def _parse_iso_duration(duration: str) -> float:
 
 
 @app.tool()
-async def get_work_packages(project_id: int) -> str:
+async def get_work_packages(
+    project_id: int,
+    version: Optional[Union[str, int]] = None,
+    status: Optional[Union[str, int]] = "open",
+    exclude_status: Optional[Union[str, int, List[Union[str, int]]]] = None,
+    max_results: Optional[int] = 100
+) -> str:
     """Get work packages for a specific project.
     
     Args:
         project_id: ID of the project to get work packages from
+        version: Only return work packages in this version/milestone, given as
+                 name (case-insensitive) or version ID (optional)
+        status: "open" (default), "closed", "all", or a specific status name
+                (case-insensitive) or status ID
+        exclude_status: Status name(s) or ID(s) to leave out, as a single value
+                        or a list (optional). Combines with status, e.g.
+                        status="open", exclude_status="On hold".
+        max_results: Maximum number of work packages to return (default 100).
+                     Use null to return every matching work package.
     
     Returns:
-        JSON string with list of work packages
+        JSON string with list of work packages, the total number of matches,
+        and whether the list was truncated by max_results
     """
     try:
         if project_id <= 0:
@@ -757,7 +783,81 @@ async def get_work_packages(project_id: int) -> str:
                 "error": "Project ID must be a positive integer"
             })
         
-        work_packages = await openproject_client.get_work_packages(project_id)
+        if max_results is not None and max_results <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "max_results must be a positive integer"
+            })
+        
+        filters = []
+        
+        # OpenProject keeps only one filter per field, so status and
+        # exclude_status must be merged into a single status filter.
+        status_operators = {"open": "o", "closed": "c", "all": "*"}
+        status_key = status.strip().lower() if isinstance(status, str) else status
+        if status_key is None or status_key == "":
+            status_key = "open"
+        
+        statuses = await openproject_client.get_work_package_statuses()
+        if status_key in status_operators:
+            selected = [
+                s for s in statuses
+                if status_key == "all" or s.get("isClosed", False) == (status_key == "closed")
+            ]
+        else:
+            resolved_status = await _resolve_status(status)
+            if not resolved_status:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid status '{status}'. Use 'open', 'closed', 'all' or one of: "
+                             f"{_available_names(statuses)}"
+                })
+            selected = [resolved_status]
+        
+        excluded_ids = set()
+        if exclude_status is not None and exclude_status != "":
+            excluded = exclude_status if isinstance(exclude_status, list) else [exclude_status]
+            for value in excluded:
+                resolved_status = await _resolve_status(value)
+                if not resolved_status:
+                    return json.dumps({
+                        "success": False,
+                        "error": f"Invalid exclude_status '{value}'. Available statuses: "
+                                 f"{_available_names(statuses)}"
+                    })
+                excluded_ids.add(str(resolved_status["id"]))
+        
+        if not excluded_ids and status_key in status_operators:
+            filters.append({"status": {"operator": status_operators[status_key], "values": []}})
+        elif status_key == "all":
+            filters.append({"status": {"operator": "!", "values": sorted(excluded_ids)}})
+        else:
+            allowed_ids = [str(s["id"]) for s in selected if str(s["id"]) not in excluded_ids]
+            if not allowed_ids:
+                return json.dumps({
+                    "success": True,
+                    "message": f"Found 0 work packages in project {project_id} "
+                               f"(every selected status is excluded)",
+                    "total": 0,
+                    "returned": 0,
+                    "truncated": False,
+                    "work_packages": []
+                }, indent=2)
+            filters.append({"status": {"operator": "=", "values": allowed_ids}})
+        
+        if version is not None and version != "":
+            resolved_version = await _resolve_version(version, project_id)
+            if not resolved_version:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid version '{version}' for project {project_id}. "
+                             f"Available versions: {_available_names(await openproject_client.get_versions(project_id))}"
+                })
+            filters.append({"version": {"operator": "=", "values": [str(resolved_version["id"])]}})
+        
+        work_packages, total = await openproject_client.query_work_packages(
+            project_id, filters=filters, max_results=max_results
+        )
         
         wp_list = []
         for wp in work_packages:
@@ -770,12 +870,21 @@ async def get_work_packages(project_id: int) -> str:
                 "due_date": wp.get("dueDate"),
                 "status": wp.get("_links", {}).get("status", {}).get("title", "Unknown"),
                 "assignee": wp.get("_links", {}).get("assignee", {}).get("title", "Unassigned"),
+                "version": _version_title(wp),
                 "url": f"{settings.openproject_url}/work_packages/{wp.get('id')}"
             })
         
+        truncated = len(wp_list) < total
+        message = f"Found {total} work packages in project {project_id}"
+        if truncated:
+            message += f", returning the first {len(wp_list)} (raise max_results to get more)"
+        
         return json.dumps({
             "success": True,
-            "message": f"Found {len(wp_list)} work packages in project {project_id}",
+            "message": message,
+            "total": total,
+            "returned": len(wp_list),
+            "truncated": truncated,
             "work_packages": wp_list
         }, indent=2)
         

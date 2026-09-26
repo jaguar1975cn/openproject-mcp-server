@@ -455,7 +455,12 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
 - **Purpose**: Get work packages for a specific project
 - **Parameters**:
   - `project_id` (required): Project ID to get work packages from
-- **Returns**: List of work packages with full details
+  - `version` (optional): Only return work packages in this version/milestone, as name (e.g., "Sprint 1") or version ID. Case-insensitive; names are resolved within the project.
+  - `status` (optional, default `"open"`): `"open"`, `"closed"`, `"all"`, or a specific status name or ID. Case-insensitive.
+  - `exclude_status` (optional): Status name(s) or ID(s) to leave out, as a single value or a list (e.g., `["On hold", "Rejected"]`). Combines with `status`, e.g. `status="open", exclude_status="On hold"`.
+  - `max_results` (optional, default 100): Maximum number of work packages to return; `null` returns every match. All result pages are fetched automatically up to this limit.
+- **Returns**: List of work packages (id, subject, description, dates, status, assignee, version, url), plus `total` (all matches), `returned`, and `truncated` (true when `max_results` cut the list short)
+- **Error Handling**: An invalid version or status returns an error listing the available values
 
 #### `get_work_package`
 - **Purpose**: Get all details of a specific work package by ID
@@ -464,7 +469,7 @@ The OpenProject MCP Server provides comprehensive tools for AI assistants:
 - **Returns**: Complete work package details including:
   - Basic info: id, subject, description
   - Status, type, priority
-  - Version: assigned version/milestone name (null if none)
+  - Version: assigned version/milestone name (null if none; comma-separated when the instance allows several versions per work package)
   - Assignee and responsible person
   - Project info: project_id, project_name
   - Dates: start_date, due_date, created_at, updated_at
